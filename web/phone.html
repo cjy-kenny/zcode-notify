@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<title>任务通知</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(120% 80% at 50% 0%, #17202e 0%, #0b0e14 55%);
+    color: #e8edf6; min-height: 100%;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 0 16px 40px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 22px 0 18px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px; flex: none;
+    background: linear-gradient(160deg, #ff7a45, #ff6335);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 22px; color: #fff;
+    box-shadow: 0 4px 18px rgba(255, 105, 60, .35);
+  }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+  .pill {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: #93a0b5; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08); padding: 6px 12px; border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #56607a; transition: background .3s; }
+  .pill.on .dot { background: #37d67a; box-shadow: 0 0 8px rgba(55, 214, 122, .8); }
+  .pill.on { color: #7ee2a8; }
+
+  #askNotif {
+    width: 100%; border: 1px dashed rgba(255, 122, 69, .55); color: #ffab8a;
+    background: rgba(255, 122, 69, .08); border-radius: 14px; padding: 12px;
+    font-size: 14px; margin-bottom: 14px; cursor: pointer;
+  }
+
+  .card {
+    background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 16px; padding: 14px 16px; margin-bottom: 12px;
+    animation: pop .25s ease;
+  }
+  @keyframes pop { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .chip {
+    font-size: 11px; color: #ffb694; background: rgba(255, 122, 69, .13);
+    border: 1px solid rgba(255, 122, 69, .25); border-radius: 6px; padding: 2px 8px;
+    max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .time { font-size: 12px; color: #6f7b92; }
+  .ntitle { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .nbody { font-size: 14px; line-height: 1.55; color: #b8c2d4; word-break: break-all; }
+
+  #empty { text-align: center; padding: 90px 0 0; display: none; }
+  #empty .bell { font-size: 54px; opacity: .5; }
+  #empty p { margin-top: 14px; color: #8b97ac; font-size: 15px; }
+  #empty .sub { font-size: 13px; color: #5d687c; margin-top: 6px; }
+
+  footer { text-align: center; font-size: 12px; color: #566078; margin-top: 28px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">Z</div>
+      <h1>任务通知</h1>
+    </div>
+    <div id="live" class="pill"><span class="dot"></span><span id="liveText">连接中…</span></div>
+  </header>
+
+  <button id="askNotif" hidden>开启系统通知（锁屏也能弹）</button>
+
+  <main id="list"></main>
+
+  <div id="empty">
+    <div class="bell">🔔</div>
+    <p>还没有通知</p>
+    <p class="sub">ZCode 完成任务后，会第一时间在这里响铃</p>
+  </div>
+
+  <footer>
+    需与电脑连同一个 Wi-Fi · 服务地址 <span id="srv">…</span><br>
+    电脑端启动：双击 zcode-notify 目录下的 启动通知服务.bat
+  </footer>
+</div>
+
+<script>
+const TOKEN = '__TOKEN__';
+const $ = s => document.querySelector(s);
+let items = [];
+const seen = new Set();
+
+/* ---------- 渲染 ---------- */
+function timefmt(ts) {
+  const d = Date.now() / 1000 - ts;
+  if (d < 10) return '刚刚';
+  if (d < 3600) return Math.max(1, Math.floor(d / 60)) + ' 分钟前';
+  if (d < 86400) return Math.floor(d / 3600) + ' 小时前';
+  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
+function render() {
+  const list = $('#list');
+  list.innerHTML = '';
+  for (const it of items) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const chip = it.project ? '<span class="chip">' + esc(it.project) + '</span>' : '<span></span>';
+    card.innerHTML =
+      '<div class="row">' + chip + '<span class="time">' + timefmt(it.ts) + '</span></div>' +
+      '<div class="ntitle">' + esc(it.title) + '</div>' +
+      '<div class="nbody">' + esc(it.body || '') + '</div>';
+    list.appendChild(card);
+  }
+  $('#empty').style.display = items.length ? 'none' : 'block';
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/* ---------- 数据 ---------- */
+function push(d, fresh) {
+  if (!d || !d.id || seen.has(d.id)) return;
+  seen.add(d.id);
+  items.unshift(d);
+  items = items.slice(0, 100);
+  try { localStorage.setItem('zn_cache', JSON.stringify(items)); } catch (e) {}
+  render();
+  if (fresh) {
+    ding();
+    try { navigator.vibrate && navigator.vibrate([60, 50, 60]); } catch (e) {}
+    try {
+      if (window.Notification && Notification.permission === 'granted') {
+        new Notification(d.title, { body: d.body || '', icon: '/icons/icon-192.png', tag: d.id });
+      }
+    } catch (e) {}
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch('/history');
+    const d = await r.json();
+    items = d.items || [];
+  } catch (e) {
+    try { items = JSON.parse(localStorage.getItem('zn_cache') || '[]'); } catch (e2) { items = []; }
+  }
+  for (const it of items) seen.add(it.id);
+  render();
+}
+
+/* ---------- 实时连接 ---------- */
+function setLive(on) {
+  $('#live').classList.toggle('on', on);
+  $('#liveText').textContent = on ? '实时连接' : '重连中…';
+}
+
+function connect() {
+  const url = '/events' + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
+  const es = new EventSource(url);
+  es.addEventListener('notify', ev => {
+    let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+    push(d, true);
+  });
+  es.onopen = () => setLive(true);
+  es.onerror = () => setLive(false);   // EventSource 会自动重连
+}
+
+/* ---------- 响铃 ---------- */
+let AC;
+function ding() {
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    const t = AC.currentTime;
+    [[880, 0], [1174.7, 0.09]].forEach(([f, dt]) => {
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + dt);
+      g.gain.exponentialRampToValueAtTime(0.22, t + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.35);
+      o.connect(g); g.connect(AC.destination);
+      o.start(t + dt); o.stop(t + dt + 0.4);
+    });
+  } catch (e) {}
+}
+
+/* ---------- 系统通知权限 ---------- */
+const askBtn = $('#askNotif');
+if (window.Notification) {
+  if (Notification.permission === 'default') askBtn.hidden = false;
+  askBtn.onclick = () => Notification.requestPermission().then(() => { askBtn.hidden = true; });
+}
+
+$('#srv').textContent = location.host;
+load();
+connect();
+setInterval(render, 30000);   // 相对时间刷新
+</script>
+</body>
+</html>

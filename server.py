@@ -1,0 +1,394 @@
+# -*- coding: utf-8 -*-
+"""ZCode 任务通知 —— 服务端
+
+接收 ZCode Stop hook 的完成回调，通过 SSE 实时推送到手机端 app 和管理面板。
+零依赖：纯 Python 标准库。启动：python server.py（或双击 启动通知服务.bat）
+
+接口一览：
+  GET  /          管理面板（电脑浏览器打开）
+  GET  /phone     手机端通知页（手机浏览器/app 打开）
+  GET  /events    SSE 实时推送流（token 只用于写接口鉴权，读取不设限）
+  GET  /history   最近通知列表（JSON）
+  GET  /status    服务状态（客户端数、hook 配置检测等）
+  POST /notify    上报一条通知（本机回环免 token，局域网需 ?token=）
+"""
+import json
+import os
+import queue
+import socket
+import subprocess
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+WEB = os.path.join(ROOT, 'web')
+STATE = os.path.join(ROOT, 'state.json')
+PORT = 8787
+MAX_HISTORY = 200
+
+_lock = threading.Lock()
+_clients = []            # 每个 SSE 客户端一个 Queue
+_history = []            # [{id,title,body,project,ts}]
+_token = ''              # 写接口（局域网 POST /notify）的口令，首次启动生成
+
+BROKER_HOST = 'broker.emqx.io'   # 公网 MQTT 中转（跨网络推送）；可改成自建 mosquitto 地址
+BROKER_PORT = 1883
+_mqtt_topic = ''                 # 订阅码：手机端凭它订阅公网通道，随机生成即机密
+_mqtt_q = queue.Queue(maxsize=100)
+
+
+# ---------------------------------------------------------------- 状态与推送
+
+def load_state():
+    global _token, _history, _mqtt_topic
+    try:
+        with open(STATE, encoding='utf-8') as f:
+            st = json.load(f)
+        _token = st.get('token', '')
+        _history = st.get('history', [])
+        _mqtt_topic = st.get('mqtt_topic', '')
+    except Exception:
+        _token, _history, _mqtt_topic = '', [], ''
+    if not _token:
+        _token = os.urandom(8).hex()
+        save_state()
+    if not _mqtt_topic:
+        _mqtt_topic = os.urandom(16).hex()
+        save_state()
+
+
+def save_state():
+    try:
+        with open(STATE, 'w', encoding='utf-8') as f:
+            json.dump({'token': _token, 'mqtt_topic': _mqtt_topic,
+                       'history': _history[-MAX_HISTORY:]},
+                      f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print('state.json 写入失败:', e)
+
+
+def broadcast(item):
+    with _lock:
+        _history.append(item)
+        del _history[:-MAX_HISTORY]
+        dead = []
+        for q in _clients:
+            try:
+                q.put_nowait(item)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            _clients.remove(q)
+    save_state()
+    try:  # 跨网络通道：手机不在同一 Wi-Fi 时也能收到
+        _mqtt_q.put_nowait(json.dumps(item, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 环境检测
+
+def detect_ip():
+    """取本机局域网 IP（UDP connect 只选路由不发包）。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith('127.'):
+            return ip
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith('127.'):
+                return ip
+    except Exception:
+        pass
+    return '127.0.0.1'
+
+
+def all_ips():
+    ips = []
+    for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+        ip = info[4][0]
+        if not ip.startswith('127.') and ip not in ips:
+            ips.append(ip)
+    primary = detect_ip()
+    if primary in ips:
+        ips.remove(primary)
+    return [primary] + ips
+
+
+def hook_configured():
+    """检测 ZCode 配置里是否注册了本项目的 hook 脚本。"""
+    script = os.path.join(ROOT, 'hook_notify.py')
+    for path in [os.path.expanduser('~/.zcode/cli/config.json'),
+                 os.path.join(ROOT, '..', '.zcode', 'config.json')]:
+        try:
+            with open(path, encoding='utf-8') as f:
+                if 'hook_notify.py' in f.read() and os.path.exists(script):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+# ------------------------------------------------- UDP 自动配对（装上即连）
+
+def discovery_responder():
+    """UDP :8788 应答手机 app 的「自动搜索」广播。
+
+    手机 app 发一条 ZCODE-NOTIFY-DISCOVER 广播，本机回 name + 可用 IP + 端口，
+    app 探测 /status 通了就自动连上。
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        s.bind(('', 8788))
+    except OSError as e:
+        print('自动配对端口 8788 被占用（%s），app 内手动粘贴地址仍可用。' % e)
+        return
+    while True:
+        try:
+            data, addr = s.recvfrom(2048)
+        except OSError:
+            continue
+        if data.startswith(b'ZCODE-NOTIFY-DISCOVER'):
+            payload = json.dumps({'name': socket.gethostname(), 'port': PORT,
+                                  'ips': all_ips()}).encode('utf-8')
+            try:
+                s.sendto(payload, addr)
+            except OSError:
+                pass
+
+
+# ------------------------------------------------- 公网 MQTT 中转（跨网络推送）
+
+def _enc_str(s):
+    b = s.encode('utf-8')
+    return len(b).to_bytes(2, 'big') + b
+
+
+def _enc_len(n):
+    out = bytearray()
+    while True:
+        d = n % 128
+        n //= 128
+        if n:
+            d |= 0x80
+        out.append(d)
+        if not n:
+            return bytes(out)
+
+
+def _recv_exact(s, n):
+    buf = b''
+    while len(buf) < n:
+        c = s.recv(n - len(buf))
+        if not c:
+            raise OSError('对端关闭连接')
+        buf += c
+    return buf
+
+
+def mqtt_publish_once(topic, payload):
+    """极简 MQTT 3.1.1（纯标准库）：CONNECT → PUBLISH(QoS1) → 等 PUBACK → 断开。
+
+    每条通知一条短连接：量小无所谓，胜在零依赖、无状态、不怕断。
+    """
+    body = (_enc_str('MQTT') + bytes([4, 0x02]) + (60).to_bytes(2, 'big')
+            + _enc_str('zcode-server-' + os.urandom(4).hex()))
+    connect = bytes([0x10]) + _enc_len(len(body)) + body
+    pub_vh = _enc_str(topic) + (1).to_bytes(2, 'big')
+    pub = bytes([0x32]) + _enc_len(len(pub_vh) + len(payload)) + pub_vh + payload
+
+    s = socket.create_connection((BROKER_HOST, BROKER_PORT), timeout=5)
+    try:
+        s.settimeout(5)
+        s.sendall(connect)
+        ack = _recv_exact(s, 4)
+        if ack[0] != 0x20 or ack[3] != 0:
+            raise OSError('CONNACK 异常: %s' % ack.hex())
+        s.sendall(pub)
+        pa = _recv_exact(s, 4)
+        if pa[0] != 0x40:
+            raise OSError('PUBACK 异常: %s' % pa.hex())
+    finally:
+        s.close()
+
+
+def mqtt_publisher():
+    while True:
+        payload = _mqtt_q.get()
+        try:
+            mqtt_publish_once('zcode-notify/' + _mqtt_topic, payload.encode('utf-8'))
+        except Exception:
+            pass  # 公网不通就算了：局域网 SSE 还在；下条通知再试
+
+
+# ---------------------------------------------------------------- HTTP
+
+MIME = {'.html': 'text/html; charset=utf-8', '.json': 'application/json; charset=utf-8',
+        '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.ico': 'image/x-icon'}
+
+
+class Handler(BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        pass  # 关掉默认访问日志，只打关键事件
+
+    # ---- 基础工具 ----
+
+    def _send(self, code, ctype, body):
+        self.send_response(code)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def _html(self, code, filename):
+        try:
+            with open(os.path.join(WEB, filename), 'rb') as f:
+                data = f.read()
+            data = data.replace(b'__TOKEN__', _token.encode())
+            self._send(code, 'text/html; charset=utf-8', data)
+        except Exception as e:
+            self._send(500, 'text/plain; charset=utf-8', ('页面缺失: %s' % e).encode('utf-8'))
+
+    def _file(self, filename):
+        path = os.path.normpath(os.path.join(WEB, filename))
+        if not path.startswith(WEB) or not os.path.isfile(path):
+            return self._send(404, 'text/plain', b'not found')
+        ext = os.path.splitext(filename)[1]
+        with open(path, 'rb') as f:
+            self._send(200, MIME.get(ext, 'application/octet-stream'), f.read())
+
+    def _token_ok(self):
+        q = urllib.parse.urlparse(self.path).query
+        tok = urllib.parse.parse_qs(q).get('token', [''])[0]
+        return tok == _token
+
+    def _loopback(self):
+        return self.client_address[0] in ('127.0.0.1', '::1')
+
+    # ---- GET ----
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == '/':
+            return self._html(200, 'dashboard.html')
+        if path == '/phone':
+            return self._html(200, 'phone.html')
+        if path == '/manifest.json':
+            return self._file('manifest.json')
+        if path == '/qr.min.js':
+            return self._file('qr.min.js')
+        if path in ('/icons/icon-192.png', '/icons/icon-512.png'):
+            return self._file(path.lstrip('/'))
+        if path == '/events':
+            return self._events()
+        if path == '/history':
+            with _lock:
+                items = list(reversed(_history[-50:]))
+            return self._send(200, 'application/json; charset=utf-8',
+                              json.dumps({'items': items}, ensure_ascii=False).encode('utf-8'))
+        if path == '/status':
+            st = {'clients': len(_clients), 'total': len(_history),
+                  'ip': detect_ip(), 'ips': all_ips(), 'port': PORT,
+                  'token': _token, 'mqtt': _mqtt_topic, 'hook': hook_configured()}
+            return self._send(200, 'application/json; charset=utf-8',
+                              json.dumps(st, ensure_ascii=False).encode('utf-8'))
+        self._send(404, 'text/plain', b'not found')
+
+    # ---- SSE ----
+
+    def _events(self):
+        if not (self._loopback() or self._token_ok()):
+            return self._send(403, 'text/plain; charset=utf-8', '口令不对'.encode('utf-8'))
+        q = queue.Queue()
+        with _lock:
+            _clients.append(q)
+        print('[推送] 新客户端接入 %s（当前 %d 个）' % (self.client_address[0], len(_clients)), flush=True)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=15)
+                    data = json.dumps(item, ensure_ascii=False)
+                    self.wfile.write(('event: notify\ndata: ' + data + '\n\n').encode('utf-8'))
+                except queue.Empty:
+                    self.wfile.write(b': ping\n\n')   # 心跳，防中间设备断空闲连接
+                self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            with _lock:
+                if q in _clients:
+                    _clients.remove(q)
+            print('[推送] 客户端断开 %s（剩余 %d 个）' % (self.client_address[0], len(_clients)), flush=True)
+
+    # ---- POST ----
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path != '/notify':
+            return self._send(404, 'text/plain', b'not found')
+        if not (self._loopback() or self._token_ok()):
+            return self._send(403, 'text/plain; charset=utf-8', '口令不对'.encode('utf-8'))
+        try:
+            length = int(self.headers.get('Content-Length', 0) or 0)
+            data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        item = {
+            'id': os.urandom(4).hex(),
+            'title': str(data.get('title') or 'ZCode 通知')[:80],
+            'body': str(data.get('body') or '')[:500],
+            'project': str(data.get('project') or '')[:40],
+            'ts': time.time(),
+        }
+        broadcast(item)
+        print('[通知] %s | %s' % (item['title'], item['body'][:50]), flush=True)
+        self.send_response(204)
+        self.end_headers()
+
+
+def main():
+    load_state()
+    ip = detect_ip()
+    threading.Thread(target=discovery_responder, daemon=True).start()
+    threading.Thread(target=mqtt_publisher, daemon=True).start()
+    try:
+        httpd = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+    except OSError:
+        print('启动失败：端口 %d 被占用（可能已有一个通知服务在跑）。' % PORT)
+        return 1
+    print('=' * 54, flush=True)
+    print('  ZCode 任务通知服务已启动', flush=True)
+    print('  管理面板  :  http://%s:%d/' % (ip, PORT), flush=True)
+    print('  手机端地址:  http://%s:%d/phone' % (ip, PORT), flush=True)
+    print('  自动配对:  手机 app 打开即自动连接（同一 Wi-Fi，UDP 8788）', flush=True)
+    print('  跨网络推送: 经 %s 中转，手机走流量/不在家也能收' % BROKER_HOST, flush=True)
+    print('  （IP 变了以面板显示为准）', flush=True)
+    print('=' * 54, flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print('\n已停止。')
+    return 0
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())

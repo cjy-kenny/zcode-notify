@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZCode 任务通知 · 控制台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: radial-gradient(120% 80% at 50% 0%, #17202e 0%, #0b0e14 55%);
+    color: #e8edf6; min-height: 100vh; padding: 28px 16px 60px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  h1 { font-size: 21px; font-weight: 700; }
+  .pill {
+    display: flex; align-items: center; gap: 7px; font-size: 12px;
+    color: #7ee2a8; background: rgba(55,214,122,.08); border: 1px solid rgba(55,214,122,.25);
+    padding: 6px 12px; border-radius: 999px;
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #37d67a; box-shadow: 0 0 8px rgba(55,214,122,.8); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.07);
+    border-radius: 16px; padding: 18px 20px;
+  }
+  .card h2 { font-size: 14px; color: #93a0b5; font-weight: 600; margin-bottom: 14px; letter-spacing: .5px; }
+  .url {
+    font-family: Consolas, monospace; font-size: 15px; color: #ffb694; word-break: break-all;
+    background: rgba(0,0,0,.25); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;
+  }
+  button {
+    background: linear-gradient(160deg, #ff7a45, #ff6335); color: #fff; border: 0;
+    border-radius: 10px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+  }
+  button.ghost { background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12); color: #c9d1e0; }
+  button:active { transform: translateY(1px); }
+  .hint { font-size: 12px; color: #6f7b92; line-height: 1.7; margin-top: 10px; }
+  #qr { background: #fff; border-radius: 10px; padding: 8px; width: fit-content; margin-top: 12px; }
+  .stats { display: flex; gap: 10px; }
+  .stat { flex: 1; background: rgba(0,0,0,.22); border-radius: 10px; padding: 12px; text-align: center; }
+  .stat b { display: block; font-size: 22px; margin-bottom: 4px; }
+  .stat span { font-size: 12px; color: #6f7b92; }
+  .ok { color: #37d67a; } .bad { color: #ff7a45; }
+  .hist { font-size: 13px; color: #b8c2d4; }
+  .hist .h { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .hist .h:last-child { border: 0; }
+  .hist .t { color: #6f7b92; flex: none; font-family: Consolas, monospace; }
+  .hist .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ZCode 任务通知 · 控制台</h1>
+    <div class="pill"><span class="dot"></span>服务在线</div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>手机接入</h2>
+      <div class="url" id="phoneUrl">…</div>
+      <button id="copyBtn">复制地址</button>
+      <div id="qr" hidden></div>
+      <div class="hint" id="ips"></div>
+      <div class="hint">手机浏览器打开上面的地址即可收通知（需与电脑同一 Wi-Fi）。<br>
+      也可以装 APK 版（zcode-notify/dist），在后台也能收到系统通知。</div>
+    </div>
+
+    <div class="card">
+      <h2>链路状态</h2>
+      <div class="stats">
+        <div class="stat"><b id="stClients" class="ok">-</b><span>手机在线</span></div>
+        <div class="stat"><b id="stTotal">-</b><span>累计通知</span></div>
+        <div class="stat"><b id="stHook">-</b><span>ZCode hook</span></div>
+      </div>
+      <div class="hint" id="hookHint"></div>
+      <div class="hint" id="mqttHint"></div>
+    </div>
+
+    <div class="card">
+      <h2>发送测试</h2>
+      <button id="testBtn">发送测试通知</button>
+      <span id="testResult" style="margin-left:10px;font-size:13px;color:#7ee2a8;"></span>
+      <div class="hint">点一下，所有在线的手机端应立即响铃弹出这条通知——这是验证整条链路最快的方式。</div>
+    </div>
+
+    <div class="card">
+      <h2>最近通知</h2>
+      <div class="hist" id="hist">加载中…</div>
+    </div>
+  </div>
+</div>
+
+<script src="/qr.min.js" onerror="window.__noqr=1"></script>
+<script>
+const TOKEN = '__TOKEN__';
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let phoneUrl = '';
+
+async function poll() {
+  try {
+    const st = await (await fetch('/status')).json();
+    phoneUrl = 'http://' + st.ip + ':' + st.port + '/phone';
+    $('#phoneUrl').textContent = phoneUrl;
+    $('#stClients').textContent = st.clients;
+    $('#stTotal').textContent = st.total;
+    const h = $('#stHook');
+    h.textContent = st.hook ? '已配置' : '未配置';
+    h.className = st.hook ? 'ok' : 'bad';
+    $('#hookHint').textContent = st.hook
+      ? '任务 hook 已注册：开始（UserPromptSubmit）和完成（Stop）都会自动回调本服务。'
+      : '还没注册到 ZCode（UserPromptSubmit / Stop 事件）。按 README 里的 hooks 配置段加一下即可。';
+    $('#mqttHint').textContent = st.mqtt
+      ? '跨网络推送已开启：手机走流量/不在家也能收（订阅码 ' + String(st.mqtt).slice(0, 10) + '…，经 broker.emqx.io 中转）'
+      : '跨网络推送未开启。';
+    const others = (st.ips || []).filter(x => x !== st.ip);
+    $('#ips').textContent = others.length ? '其它网卡 IP：' + others.join('、') : 'IP 变了的话以这里显示的为准';
+    if (!qrDone && window.QRCode && !window.__noqr) {
+      qrDone = true;
+      $('#qr').hidden = false;
+      new QRCode($('#qr'), { text: phoneUrl, width: 132, height: 132, colorDark: '#0b0e14', colorLight: '#ffffff' });
+    }
+  } catch (e) {}
+}
+
+async function loadHist() {
+  try {
+    const d = await (await fetch('/history')).json();
+    $('#hist').innerHTML = (d.items || []).map(it =>
+      '<div class="h"><span class="t">' + new Date(it.ts * 1000).toLocaleTimeString('zh-CN', { hour12: false }) +
+      '</span><span class="b">' + esc(it.title + ' · ' + (it.body || '')) + '</span></div>'
+    ).join('') || '还没有通知';
+  } catch (e) {}
+}
+
+$('#testBtn').onclick = async () => {
+  $('#testResult').textContent = '';
+  try {
+    const r = await fetch('/notify?token=' + encodeURIComponent(TOKEN), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '测试通知', project: '链路自测',
+        body: '手机上看到这条并听到响铃，说明整条链路通了（' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + '）' })
+    });
+    $('#testResult').textContent = r.ok ? '已发送 ✓' : '发送失败 ' + r.status;
+  } catch (e) { $('#testResult').textContent = '发送失败'; }
+  setTimeout(loadHist, 300);
+};
+
+$('#copyBtn').onclick = () => {
+  const done = ok => { $('#copyBtn').textContent = ok ? '已复制 ✓' : '复制失败'; setTimeout(() => $('#copyBtn').textContent = '复制地址', 1500); };
+  const fallback = () => {
+    const i = document.createElement('textarea'); i.value = phoneUrl; document.body.appendChild(i);
+    i.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    i.remove(); done(ok);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(phoneUrl).then(() => done(true), fallback);
+  else fallback();
+};
+
+let qrDone = false;
+poll(); loadHist();
+setInterval(poll, 3000);
+setInterval(loadHist, 5000);
+</script>
+</body>
+</html>

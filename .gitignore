@@ -1,0 +1,9 @@
+# 运行时生成：含订阅码与通知历史，勿提交
+state.json
+__pycache__/
+
+# 构建产物
+dist/
+android/build/
+*.idsig
+*.pyc
