@@ -7,9 +7,30 @@
 import json
 import os
 import sys
+import time
 import urllib.request
 
 PORT = 8787
+INBOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'inbox.json')
+
+
+def take_inbox():
+    """取走收件箱里的手机消息（取走即清空，防重复投递）。"""
+    try:
+        with open(INBOX, encoding='utf-8') as f:
+            box = json.load(f)
+        if not isinstance(box, list) or not box:
+            return None
+        os.remove(INBOX)
+        try:   # 投递流水：万一 hook 输出格式不被当前 ZCode 支持，消息还能从这里找回
+            with open(os.path.join(os.path.dirname(INBOX), 'delivered.log'),
+                      'a', encoding='utf-8') as f:
+                f.write(json.dumps({'at': time.time(), 'items': box}, ensure_ascii=False) + '\n')
+        except Exception:
+            pass
+        return box
+    except Exception:
+        return None
 
 
 def last_text(transcript_path, cap=1500):
@@ -59,6 +80,18 @@ def main():
             body += '：' + (prompt[:60] + '…' if len(prompt) > 60 else prompt)
         full = prompt[:1500]
     else:
+        # 反向通道：收件箱有手机消息 → 以「续跑指令」形式注入会话（本轮不算完成，
+        # 不发完成通知；ZCode 处理完消息、真正结束时才发）
+        box = take_inbox()
+        if box:
+            lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
+                     for i, m in enumerate(box[:10], 1)]
+            reason = ('【手机消息】手机端发来 %d 条新消息，请当作新的用户指令处理：\n%s\n'
+                      '（处理完成后正常结束本轮即可，手机端会收到完成通知；'
+                      '如果只是打招呼，回一句即可）' % (len(box), '\n'.join(lines)))
+            sys.stdout.write(json.dumps({'decision': 'block', 'reason': reason},
+                                        ensure_ascii=False))
+            return 0
         text = last_text(ev.get('transcript_path') or ev.get('transcriptPath') or '')
         title = 'ZCode 任务完成'
         body = '「%s」执行完毕' % project

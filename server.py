@@ -27,8 +27,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, 'web')
 STATE = os.path.join(ROOT, 'state.json')
+INBOX = os.path.join(ROOT, 'inbox.json')   # 手机发来的消息，等 Stop hook 取走注入会话
 PORT = 8787
-PAGE_VERSION = '0.11'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
+PAGE_VERSION = '0.13'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
 MAX_HISTORY = 200
 
 _lock = threading.Lock()
@@ -75,6 +76,23 @@ def save_state():
                       f, ensure_ascii=False, indent=1)
     except Exception as e:
         print('state.json 写入失败:', e)
+
+
+def load_inbox():
+    try:
+        with open(INBOX, encoding='utf-8') as f:
+            box = json.load(f)
+        return box if isinstance(box, list) else []
+    except Exception:
+        return []
+
+
+def save_inbox(box):
+    try:
+        with open(INBOX, 'w', encoding='utf-8') as f:
+            json.dump(box[-20:], f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print('inbox 写入失败:', e)
 
 
 def broadcast(item):
@@ -368,6 +386,26 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == '/config':
             return self._config()
+        if path == '/send':
+            # 反向通道：手机 → 服务器收件箱 → Stop hook 注入 ZCode 会话
+            if not (self._loopback() or self._token_ok()):
+                return self._send(403, 'text/plain; charset=utf-8', '口令不对'.encode('utf-8'))
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+            except Exception:
+                data = {}
+            text = str(data.get('text') or '').strip()[:500] if isinstance(data, dict) else ''
+            if not text:
+                return self._send(400, 'text/plain; charset=utf-8', 'text 必填'.encode('utf-8'))
+            with _lock:
+                box = load_inbox()
+                box.append({'text': text, 'ts': time.time(), 'from': self.client_address[0]})
+                save_inbox(box)
+            print('[手机消息] %s' % text[:80], flush=True)
+            return self._send(200, 'application/json; charset=utf-8',
+                              json.dumps({'ok': True, 'via': 'inbox', 'count': len(box)},
+                                         ensure_ascii=False).encode('utf-8'))
         if path == '/scanlog':
             # 扫码调试：手机端每一步记一笔（scan_debug.log），盲修变精修
             if not (self._loopback() or self._token_ok()):
