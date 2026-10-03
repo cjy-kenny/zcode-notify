@@ -12,6 +12,16 @@ import urllib.request
 
 PORT = 8787
 INBOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'inbox.json')
+HOOK_DEBUG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hook_debug.log')
+
+
+def debug_log(mode, sid, note):
+    try:
+        with open(HOOK_DEBUG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'at': time.time(), 'mode': mode, 'sid': sid[:24],
+                                'note': str(note)[:200]}, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
 
 
 def _write_inbox(box):
@@ -117,7 +127,23 @@ def main():
     if project.lower() in ('default', 'workspace', 'zcode'):
         project = 'ZCode'   # 默认工作区名没信息量，统一显示 ZCode
     sid = str(ev.get('session_id') or ev.get('sessionId') or '')[:64]
+    debug_log(mode, sid, 'fired')
     see_session(ev, cwd)
+    if mode == 'pre':
+        # 回合进行中：每次工具调用前注入手机消息（additionalContext，不影响工具本身）
+        box = take_inbox(sid)
+        if box:
+            lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
+                     for i, m in enumerate(box[:10], 1)]
+            ctx = ('【手机消息】手机端发来 %d 条新消息，请当作新的用户指令处理：\n%s\n'
+                   '（完成当前工作后正常结束即可，手机端会收到完成通知）'
+                   % (len(box), '\n'.join(lines)))
+            debug_log('pre', sid, 'deliver %d' % len(box))
+            sys.stdout.write(json.dumps({'hookEventName': 'PreToolUse',
+                                         'additionalContext': ctx}, ensure_ascii=False))
+        else:
+            debug_log('pre', sid, 'empty')
+        return 0
     if mode == 'start':
         prompt = str(ev.get('prompt') or ev.get('user_prompt') or '').replace('\n', ' ').strip()
         title = 'ZCode 收到新任务'
@@ -135,6 +161,7 @@ def main():
             reason = ('【手机消息】手机端发来 %d 条新消息，请当作新的用户指令处理：\n%s\n'
                       '（处理完成后正常结束本轮即可，手机端会收到完成通知；'
                       '如果只是打招呼，回一句即可）' % (len(box), '\n'.join(lines)))
+            debug_log('stop', sid, 'deliver %d' % len(box))
             # ZCode 的 Stop 续跑键是 continue:true（读自 glm/zcode.cjs 的 Lio：
             # e===Stop && t.continue===true → stopShouldContinue）；
             # hookSpecificOutput.Stop.additionalContext 再把内容注入对话，双保险
