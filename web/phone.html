@@ -312,14 +312,16 @@ async function onDecoded(text) {
 
 async function startScan() {
   if (!window.jsQR || window.__nojsqr) return toast('解码库没加载成功，请在管理面板手动粘贴链接');
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
-    return toast('此环境不支持摄像头（可用系统浏览器打开本页扫码）');
+  // getUserMedia 仅安全上下文（https/localhost）可用；WebView 里是 http://局域网IP，走拍照解码
+  const liveOK = window.isSecureContext &&
+                 navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  if (!liveOK) return photoScan();
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
     });
   } catch (e) {
-    return toast('摄像头打不开：需要相机权限');
+    return photoScan();   // 权限被拒也能拍照（用系统相机）
   }
   const video = $('#scanVideo');
   video.srcObject = scanStream;
@@ -342,6 +344,37 @@ async function startScan() {
     scanRaf = requestAnimationFrame(tick);
   };
   scanRaf = requestAnimationFrame(tick);
+}
+
+/* 拍照解码：调系统相机拍一张（或从相册选），jsQR 解静态图。 */
+function photoScan() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.setAttribute('capture', 'environment');
+  inp.onchange = () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    toast('识别中…');
+    const img = new Image();
+    const objURL = URL.createObjectURL(file);
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(objURL);
+      const d = ctx.getImageData(0, 0, c.width, c.height);
+      const code = jsQR(d.data, d.width, d.height);
+      if (code && code.data) onDecoded(code.data);
+      else toast('没识别出二维码，请离近一点、对正一点再拍');
+    };
+    img.onerror = () => { URL.revokeObjectURL(objURL); toast('照片读不出来，请重试'); };
+    img.src = objURL;
+  };
+  inp.click();
 }
 
 $('#scanBtn').onclick = startScan;

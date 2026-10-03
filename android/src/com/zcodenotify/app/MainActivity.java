@@ -3,11 +3,13 @@ package com.zcodenotify.app;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -17,6 +19,7 @@ import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -56,6 +59,8 @@ public class MainActivity extends Activity {
     private long lastAutoSearch = 0;
     /** 网页请求摄像头（扫码）时若运行时权限未给，先存请求，授权后补 grant。 */
     private volatile PermissionRequest pendingCamRequest;
+    /** 网页 <input type=file>（扫码拍照）的回调，onActivityResult 回传。 */
+    private ValueCallback<Uri[]> fileUploadCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,6 +103,20 @@ public class MainActivity extends Activity {
                     }
                 });
             }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (fileUploadCallback != null) fileUploadCallback.onReceiveValue(null);
+                fileUploadCallback = callback;
+                try {
+                    startActivityForResult(params.createIntent(), 100);
+                } catch (Exception e) {
+                    fileUploadCallback = null;
+                    return false;
+                }
+                return true;
+            }
         });
 
         FrameLayout root = new FrameLayout(this);
@@ -134,6 +153,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == 100 && fileUploadCallback != null) {
+            fileUploadCallback.onReceiveValue(
+                    WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+            fileUploadCallback = null;
+        }
+    }
+
     /** 网页用它告诉原生层“我现在可见/不可见”，避免 app 开着时再弹一遍系统通知。 */
     private class Bridge {
         @JavascriptInterface
@@ -166,23 +194,38 @@ public class MainActivity extends Activity {
         statusText.setText("正在搜索同一 Wi-Fi 里的通知服务…");
         new Thread(new Runnable() {
             public void run() {
-                final List<String> urls = discover();
+                List<String> urls = discover();
+                if (urls.isEmpty()) {   // UDP 广播常被路由器/系统拦：直连上次地址再试一次
+                    String again = probeSaved(prefs().getString("url", ""));
+                    if (again != null) urls.add(again);
+                }
+                final List<String> found = urls;
                 runOnUiThread(new Runnable() {
-                    public void run() { searchDone(urls); }
+                    public void run() { searchDone(found); }
                 });
             }
         }).start();
     }
 
-    /** 页面加载失败（电脑关机/IP 变了）时自动重新搜索，带 15s 防抖。 */
+    /** 从已存 url 提取 ip:port 再 probe 一次（TCP 直连通常比 UDP 广播可靠）。 */
+    private static String probeSaved(String url) {
+        try {
+            URL u = new URL(url);
+            return probe(u.getHost(), u.getPort() > 0 ? u.getPort() : 80);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 页面加载失败（电脑关机/IP 变了）时自动重新搜索，带 5s 防抖。 */
     private void reSearchFromError() {
         setupView.setVisibility(View.VISIBLE);
         if (searching) return;
-        if (System.currentTimeMillis() - lastAutoSearch < 15000) {
+        if (System.currentTimeMillis() - lastAutoSearch < 5000) {
             statusText.setText("连不上服务器（电脑关机了或 IP 变了）。\n"
                     + "启动电脑端服务后，点下面的按钮重新搜索。");
         } else {
-            autoSearch();
+            autoSearch();   // 内含 UDP 广播 + 直连上次地址双重探测
         }
     }
 
