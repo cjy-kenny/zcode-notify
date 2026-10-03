@@ -70,7 +70,8 @@
   /* 给 ZCode 发消息（反向通道） */
   #composer {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
-    display: flex; gap: 8px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
     background: rgba(11, 14, 20, .94); border-top: 1px solid rgba(255,255,255,.08);
   }
   #composer input {
@@ -83,6 +84,36 @@
     border-radius: 12px; font-size: 14px; font-weight: 600; padding: 0 18px; cursor: pointer;
   }
   #composer button:disabled { opacity: .5; }
+  .crow { display: flex; gap: 8px; }
+  #targetChip {
+    align-self: flex-start; cursor: pointer; font-size: 12px; color: #ffb694;
+    background: rgba(255,122,69,.10); border: 1px solid rgba(255,122,69,.28);
+    border-radius: 999px; padding: 4px 12px;
+  }
+
+  /* 话题选择弹层 */
+  #topicLayer {
+    position: fixed; inset: 0; z-index: 55; display: none;
+    background: rgba(5, 7, 11, .8); align-items: center; justify-content: center;
+  }
+  #topicLayer.on { display: flex; }
+  #topicBox {
+    width: min(86%, 380px); max-height: 76%; overflow-y: auto;
+    background: #121826; border: 1px solid rgba(255,255,255,.1);
+    border-radius: 16px; padding: 16px;
+  }
+  .ttitle { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .tsess { padding: 10px 12px; border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px; margin-bottom: 8px; cursor: pointer; }
+  .tsess:active { transform: translateY(1px); }
+  .tsess.cur { border-color: #ff7a45; background: rgba(255,122,69,.08); }
+  .tsess .tl { font-size: 14px; color: #e8edf6; }
+  .tsess .tt { font-size: 11px; color: #6f7b92; margin-top: 3px; }
+  #topicClose {
+    display: block; margin: 10px auto 0; cursor: pointer; font-size: 13px; color: #e8edf6;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 999px; padding: 8px 24px;
+  }
 
   #askNotif {
     width: 100%; border: 1px dashed rgba(255, 122, 69, .55); color: #ffab8a;
@@ -113,6 +144,8 @@
     border-radius: 10px; padding: 9px 12px;
   }
   .reply:active { transform: translateY(1px); }
+
+  .card.sent { margin-left: 15%; background: rgba(255,122,69,.10); border-color: rgba(255,122,69,.28); }
 
   #empty { text-align: center; padding: 90px 0 0; display: none; }
   #empty .bell { font-size: 54px; opacity: .5; }
@@ -159,8 +192,19 @@
   <div id="toast"></div>
 
   <div id="composer">
-    <input id="sayWhat" maxlength="500" placeholder="给 ZCode 发消息，处理完手机会收到通知">
-    <button id="sayBtn">发送</button>
+    <div id="targetChip">话题：自动（最新活跃）▾</div>
+    <div class="crow">
+      <input id="sayWhat" maxlength="500" placeholder="给 ZCode 发消息，处理完手机会收到通知">
+      <button id="sayBtn">发送</button>
+    </div>
+  </div>
+
+  <div id="topicLayer">
+    <div id="topicBox">
+      <div class="ttitle">选择回复的话题</div>
+      <div id="topicList"></div>
+      <button id="topicClose">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -187,15 +231,16 @@ function render() {
   list.innerHTML = '';
   for (const it of items) {
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (it.kind === 'sent' ? ' sent' : '');
     const chip = it.project ? '<span class="chip">' + esc(it.project) + '</span>' : '<span></span>';
     const hasFull = it.full && it.full.length > (it.body || '').length + 10;
     const reply = it.link
       ? '<div class="reply" data-url="' + esc(it.link) + '">打开远程页面回复 ▸</div>'
       : '';
+    const titleHtml = it.kind === 'sent' ? '' : '<div class="ntitle">' + esc(it.title) + '</div>';
     card.innerHTML =
       '<div class="row">' + chip + '<span class="time">' + timefmt(it.ts) + '</span></div>' +
-      '<div class="ntitle">' + esc(it.title) + '</div>' +
+      titleHtml +
       '<div class="nbody">' + esc(it.body || '') + '</div>' +
       (hasFull ? '<div class="more">点开看全文 ▾</div>' : '') + reply;
     if (hasFull) {
@@ -232,7 +277,7 @@ function push(d, fresh) {
   items = items.slice(0, 100);
   try { localStorage.setItem('zn_cache', JSON.stringify(items)); } catch (e) {}
   render();
-  if (fresh) {
+  if (fresh && d.kind !== 'sent') {
     ding();
     try { navigator.vibrate && navigator.vibrate([60, 50, 60]); } catch (e) {}
     try {
@@ -450,7 +495,51 @@ function photoScan() {
 $('#scanBtn').onclick = startScan;
 $('#scanClose').onclick = stopScan;
 
-/* ---------- 给 ZCode 发消息（反向通道） ---------- */
+/* ---------- 给 ZCode 发消息（反向通道，可选话题） ---------- */
+let target = { sid: '', label: '自动（最新活跃）' };
+try { target = JSON.parse(localStorage.getItem('zn_target')) || target; } catch (e) {}
+
+function renderTarget() {
+  $('#targetChip').textContent = '话题：' + target.label + ' ▾';
+}
+
+$('#targetChip').onclick = async () => {
+  $('#topicLayer').classList.add('on');
+  const list = $('#topicList');
+  list.innerHTML = '<div class="tsess">加载中…</div>';
+  let items = [];
+  try {
+    items = (await (await fetch('/sessions?token=' + encodeURIComponent(TOKEN))).json()).items || [];
+  } catch (e) {}
+  list.innerHTML = '';
+  const mk = (sid, label, sub) => {
+    const d = document.createElement('div');
+    d.className = 'tsess' + (target.sid === sid ? ' cur' : '');
+    d.innerHTML = '<div class="tl">' + esc(label) + '</div><div class="tt">' + esc(sub) + '</div>';
+    d.onclick = () => {
+      target = { sid: sid, label: label };
+      try { localStorage.setItem('zn_target', JSON.stringify(target)); } catch (e) {}
+      renderTarget();
+      $('#topicLayer').classList.remove('on');
+    };
+    list.appendChild(d);
+  };
+  mk('', '自动（最新活跃会话）', '谁先结束回合就投给谁');
+  for (const s of items) {
+    mk(s.sid, s.label || '未命名话题',
+       '最近活跃 ' + new Date(s.last * 1000).toLocaleString('zh-CN', { hour12: false }));
+  }
+  if (!items.length) {
+    const d = document.createElement('div');
+    d.className = 'tt';
+    d.style.cssText = 'padding:6px 2px;color:#6f7b92;font-size:12px;';
+    d.textContent = '还没有会话上报：在电脑上用一次 ZCode 后，这里就会出现话题列表';
+    list.appendChild(d);
+  }
+};
+$('#topicClose').onclick = () => $('#topicLayer').classList.remove('on');
+renderTarget();
+
 $('#sayBtn').onclick = async () => {
   const el = $('#sayWhat');
   const text = el.value.trim();
@@ -459,7 +548,7 @@ $('#sayBtn').onclick = async () => {
   try {
     const r = await fetch('/send?token=' + encodeURIComponent(TOKEN), {
       method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text })
+      body: JSON.stringify({ text: text, sid: target.sid })
     });
     const d = await r.json();
     if (d.ok) {

@@ -291,6 +291,9 @@ public class NotifyService extends Service {
             JSONObject o = new JSONObject(json);
             String id = o.optString("id", String.valueOf(System.currentTimeMillis()));
             if (!markSeen(id)) return;   // 双通道重复投递，丢弃第二条
+            if ("sent".equals(o.optString("kind", ""))) {
+                return;   // 自己发的消息气泡：只进网页，不弹系统通知
+            }
             double ts = o.optDouble("ts", 0);
             if (ts > 0 && System.currentTimeMillis() / 1000.0 - ts > 1800) {
                 return;   // 离线补投的过期消息（超过 30 分钟）不弹

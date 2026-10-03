@@ -28,8 +28,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, 'web')
 STATE = os.path.join(ROOT, 'state.json')
 INBOX = os.path.join(ROOT, 'inbox.json')   # 手机发来的消息，等 Stop hook 取走注入会话
+SESSIONS = os.path.join(ROOT, 'sessions.json')   # hook 上报的会话注册表（手机选话题用）
 PORT = 8787
-PAGE_VERSION = '0.13'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
+PAGE_VERSION = '0.14'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
 MAX_HISTORY = 200
 
 _lock = threading.Lock()
@@ -95,6 +96,23 @@ def save_inbox(box):
         print('inbox 写入失败:', e)
 
 
+def load_sessions():
+    try:
+        with open(SESSIONS, encoding='utf-8') as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_sessions(d):
+    try:
+        with open(SESSIONS, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print('sessions 写入失败:', e)
+
+
 def broadcast(item):
     with _lock:
         _history.append(item)
@@ -108,6 +126,8 @@ def broadcast(item):
         for q in dead:
             _clients.remove(q)
     save_state()
+    if item.get('kind') == 'sent':
+        return   # 自己发的消息只进页面气泡，不发系统通知、不走公网
     try:  # 跨网络通道：手机不在同一 Wi-Fi 时也能收到
         _mqtt_q.put_nowait(json.dumps(item, ensure_ascii=False))
     except Exception:
@@ -336,6 +356,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(path.lstrip('/'))
         if path == '/events':
             return self._events()
+        if path == '/sessions':
+            # 话题列表：hook 上报过的会话，按最近活跃排序
+            if not (self._loopback() or self._token_ok()):
+                return self._send(403, 'text/plain', b'forbidden')
+            with _lock:
+                d = load_sessions()
+            items = [{'sid': k, 'label': v.get('label', ''), 'last': v.get('last', 0)}
+                     for k, v in d.items()]
+            items.sort(key=lambda x: -x['last'])
+            return self._send(200, 'application/json; charset=utf-8',
+                              json.dumps({'items': items}, ensure_ascii=False).encode('utf-8'))
         if path == '/history':
             with _lock:
                 items = list(reversed(_history[-50:]))
@@ -395,17 +426,45 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
             except Exception:
                 data = {}
-            text = str(data.get('text') or '').strip()[:500] if isinstance(data, dict) else ''
+            if not isinstance(data, dict):
+                data = {}
+            text = str(data.get('text') or '').strip()[:500]
             if not text:
                 return self._send(400, 'text/plain; charset=utf-8', 'text 必填'.encode('utf-8'))
+            sid = str(data.get('sid') or '')[:64]   # 空 = 自动（最新活跃会话）
             with _lock:
                 box = load_inbox()
-                box.append({'text': text, 'ts': time.time(), 'from': self.client_address[0]})
+                box.append({'text': text, 'ts': time.time(),
+                            'from': self.client_address[0], 'sid': sid})
                 save_inbox(box)
             print('[手机消息] %s' % text[:80], flush=True)
+            broadcast({'id': os.urandom(4).hex(), 'title': '📱 手机消息',
+                       'body': text, 'kind': 'sent', 'sid': sid, 'ts': time.time()})
             return self._send(200, 'application/json; charset=utf-8',
                               json.dumps({'ok': True, 'via': 'inbox', 'count': len(box)},
                                          ensure_ascii=False).encode('utf-8'))
+        if path == '/session-see':
+            # hook 上报会话（sid + 项目名），手机端「选择话题」的数据源
+            if not self._loopback():
+                return self._send(403, 'text/plain', b'forbidden')
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+            except Exception:
+                data = {}
+            sid = str(data.get('sid') or '')[:64] if isinstance(data, dict) else ''
+            if sid:
+                with _lock:
+                    d = load_sessions()
+                    d[sid] = {'label': str(data.get('label') or '')[:40],
+                              'cwd': str(data.get('cwd') or '')[:200],
+                              'last': time.time()}
+                    cutoff = time.time() - 7 * 86400
+                    d = {k: v for k, v in d.items() if v.get('last', 0) > cutoff}
+                    save_sessions(d)
+            self.send_response(204)
+            self.end_headers()
+            return
         if path == '/scanlog':
             # 扫码调试：手机端每一步记一笔（scan_debug.log），盲修变精修
             if not (self._loopback() or self._token_ok()):

@@ -25,7 +25,7 @@ else:   # 本机 SDK：取版本号最大的 build-tools
     PLAT_JAR = os.path.join(SDK, 'platforms', 'android-34', 'android.jar')
 OUT = os.path.join(HERE, 'build')
 DIST = os.path.join(PROJECT, 'dist')
-VERSION = '0.10'
+VERSION = '0.11'
 APK = os.path.join(DIST, 'zcode-notify-v%s.apk' % VERSION)
 LIBS = glob.glob(os.path.join(HERE, 'libs', '*.jar'))   # 第三方 jar（如 Paho MQTT）
 

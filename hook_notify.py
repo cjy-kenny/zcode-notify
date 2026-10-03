@@ -14,23 +14,55 @@ PORT = 8787
 INBOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'inbox.json')
 
 
-def take_inbox():
-    """取走收件箱里的手机消息（取走即清空，防重复投递）。"""
+def _write_inbox(box):
+    try:
+        with open(INBOX, 'w', encoding='utf-8') as f:
+            json.dump(box, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def take_inbox(current_sid):
+    """取走投递给本会话（或未指定目标）的手机消息；指定给其它话题的保留在收件箱。"""
     try:
         with open(INBOX, encoding='utf-8') as f:
             box = json.load(f)
         if not isinstance(box, list) or not box:
             return None
-        os.remove(INBOX)
-        try:   # 投递流水：万一 hook 输出格式不被当前 ZCode 支持，消息还能从这里找回
+        now = time.time()
+        deliver = [m for m in box
+                   if not str(m.get('sid') or '') or str(m.get('sid')) == current_sid]
+        keep = [m for m in box if m not in deliver and now - float(m.get('ts') or 0) < 86400]
+        if not deliver:
+            if len(keep) != len(box):
+                _write_inbox(keep)   # 顺手清掉超过 24h 的过期消息
+            return None
+        _write_inbox(keep)
+        try:   # 投递流水：万一输出格式不被支持，消息还能找回
             with open(os.path.join(os.path.dirname(INBOX), 'delivered.log'),
                       'a', encoding='utf-8') as f:
-                f.write(json.dumps({'at': time.time(), 'items': box}, ensure_ascii=False) + '\n')
+                f.write(json.dumps({'at': now, 'sid': current_sid, 'items': deliver},
+                                   ensure_ascii=False) + '\n')
         except Exception:
             pass
-        return box
+        return deliver
     except Exception:
         return None
+
+
+def see_session(ev, cwd):
+    """向服务器上报本会话（sid + 项目名），手机端「选择话题」的数据源。"""
+    sid = str(ev.get('session_id') or ev.get('sessionId') or '')[:64]
+    if not sid:
+        return
+    try:
+        req = urllib.request.Request('http://127.0.0.1:%d/session-see' % PORT,
+                                     data=json.dumps({'sid': sid, 'cwd': cwd},
+                                                     ensure_ascii=False).encode('utf-8'),
+                                     headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=1)
+    except Exception:
+        pass
 
 
 def last_text(transcript_path, cap=1500):
@@ -72,6 +104,8 @@ def main():
     project = os.path.basename(str(cwd).rstrip('\\/')) or 'ZCode'
     if project.lower() in ('default', 'workspace', 'zcode'):
         project = 'ZCode'   # 默认工作区名没信息量，统一显示 ZCode
+    sid = str(ev.get('session_id') or ev.get('sessionId') or '')[:64]
+    see_session(ev, cwd)
     if mode == 'start':
         prompt = str(ev.get('prompt') or ev.get('user_prompt') or '').replace('\n', ' ').strip()
         title = 'ZCode 收到新任务'
@@ -80,9 +114,9 @@ def main():
             body += '：' + (prompt[:60] + '…' if len(prompt) > 60 else prompt)
         full = prompt[:1500]
     else:
-        # 反向通道：收件箱有手机消息 → 以「续跑指令」形式注入会话（本轮不算完成，
-        # 不发完成通知；ZCode 处理完消息、真正结束时才发）
-        box = take_inbox()
+        # 反向通道：收件箱有投给本会话（或未指定目标）的手机消息 → 以「续跑指令」
+        # 形式注入会话（本轮不算完成，不发完成通知；ZCode 处理完消息、真正结束时才发）
+        box = take_inbox(sid)
         if box:
             lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
                      for i, m in enumerate(box[:10], 1)]
