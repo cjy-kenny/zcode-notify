@@ -13,6 +13,8 @@ import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
@@ -52,6 +54,8 @@ public class MainActivity extends Activity {
 
     private volatile boolean searching = false;
     private long lastAutoSearch = 0;
+    /** 网页请求摄像头（扫码）时若运行时权限未给，先存请求，授权后补 grant。 */
+    private volatile PermissionRequest pendingCamRequest;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,6 +83,22 @@ public class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new Bridge(), "AndroidNotify");
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (checkSelfPermission("android.permission.CAMERA")
+                                == PackageManager.PERMISSION_GRANTED) {
+                            request.grant(request.getResources());
+                        } else {
+                            pendingCamRequest = request;
+                            requestPermissions(new String[]{"android.permission.CAMERA"}, 2);
+                        }
+                    }
+                });
+            }
+        });
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF0B0E14);
@@ -102,6 +122,16 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         moveTaskToBack(true);   // 退到后台但保持前台服务收通知
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == 2 && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                && pendingCamRequest != null) {
+            pendingCamRequest.grant(pendingCamRequest.getResources());
+            pendingCamRequest = null;
+        }
     }
 
     /** 网页用它告诉原生层“我现在可见/不可见”，避免 app 开着时再弹一遍系统通知。 */

@@ -310,6 +310,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._file('manifest.json')
         if path == '/qr.min.js':
             return self._file('qr.min.js')
+        if path == '/jsqr.min.js':
+            return self._file('jsqr.min.js')
         if path in ('/icons/icon-192.png', '/icons/icon-512.png'):
             return self._file(path.lstrip('/'))
         if path == '/events':

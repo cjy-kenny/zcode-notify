@@ -37,6 +37,36 @@
   .pill.on .dot { background: #37d67a; box-shadow: 0 0 8px rgba(55, 214, 122, .8); }
   .pill.on { color: #7ee2a8; }
 
+  #scanBtn {
+    display: flex; align-items: center; gap: 5px; cursor: pointer;
+    font-size: 12px; color: #e8edf6; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.12); padding: 6px 12px; border-radius: 999px;
+  }
+  #scanBtn:active { transform: translateY(1px); }
+
+  /* 扫码遮罩 */
+  #scanLayer {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    background: #05070b; flex-direction: column;
+  }
+  #scanLayer.on { display: flex; }
+  #scanVideo { flex: 1; width: 100%; object-fit: cover; min-height: 0; }
+  #scanTip {
+    padding: 14px 18px; text-align: center; font-size: 14px; color: #c9d1e0;
+    background: rgba(255,255,255,.05);
+  }
+  #scanClose {
+    margin: 14px auto 26px; display: block; cursor: pointer;
+    font-size: 14px; color: #e8edf6; background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.15); border-radius: 999px; padding: 10px 26px;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); z-index: 60;
+    max-width: 84%; font-size: 13px; line-height: 1.5; color: #fff;
+    background: rgba(20, 26, 36, .95); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 12px; padding: 10px 16px; display: none; text-align: center;
+  }
+
   #askNotif {
     width: 100%; border: 1px dashed rgba(255, 122, 69, .55); color: #ffab8a;
     background: rgba(255, 122, 69, .08); border-radius: 14px; padding: 12px;
@@ -82,7 +112,10 @@
       <div class="logo">Z</div>
       <h1>任务通知</h1>
     </div>
-    <div id="live" class="pill"><span class="dot"></span><span id="liveText">连接中…</span></div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button id="scanBtn">⛶ 扫码</button>
+      <div id="live" class="pill"><span class="dot"></span><span id="liveText">连接中…</span></div>
+    </div>
   </header>
 
   <button id="askNotif" hidden>开启系统通知（锁屏也能弹）</button>
@@ -99,7 +132,17 @@
     需与电脑连同一个 Wi-Fi · 服务地址 <span id="srv">…</span><br>
     电脑端启动：双击 zcode-notify 目录下的 启动通知服务.bat
   </footer>
+
+  <div id="scanLayer">
+    <div id="scanTip">对准 ZCode 桌面端的远程连接二维码</div>
+    <video id="scanVideo" muted playsinline autoplay></video>
+    <button id="scanClose">关闭</button>
+  </div>
+  <div id="toast"></div>
 </div>
+
+<script src="/qr.min.js" onerror="window.__noqr=1"></script>
+<script src="/jsqr.min.js" onerror="window.__nojsqr=1"></script>
 
 <script>
 const TOKEN = '__TOKEN__';
@@ -227,6 +270,82 @@ $('#srv').textContent = location.host;
 load();
 connect();
 setInterval(render, 30000);   // 相对时间刷新
+
+/* ---------- 扫码更新远程链接 ---------- */
+let scanStream = null, scanRaf = 0;
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(toast._h);
+  toast._h = setTimeout(() => { t.style.display = 'none'; }, 3200);
+}
+
+function stopScan() {
+  cancelAnimationFrame(scanRaf);
+  if (scanStream) { scanStream.getTracks().forEach(x => x.stop()); scanStream = null; }
+  $('#scanVideo').srcObject = null;
+  $('#scanLayer').classList.remove('on');
+}
+
+function scanFailed(msg) {
+  stopScan();
+  toast(msg || '扫码未成功');
+}
+
+async function onDecoded(text) {
+  stopScan();
+  const url = String(text || '').trim();
+  if (!/^https?:\/\//i.test(url)) return scanFailed('二维码内容不是链接');
+  try {
+    const r = await fetch('/config?token=' + encodeURIComponent(TOKEN), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remote_url: url })
+    });
+    if (!r.ok) throw 0;
+    toast('远程链接已更新 ✓ 之后的通知都带新链接');
+  } catch (e) {
+    toast('链接已识别，但保存失败（服务器没连上？）');
+  }
+}
+
+async function startScan() {
+  if (!window.jsQR || window.__nojsqr) return toast('解码库没加载成功，请在管理面板手动粘贴链接');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+    return toast('此环境不支持摄像头（可用系统浏览器打开本页扫码）');
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+  } catch (e) {
+    return toast('摄像头打不开：需要相机权限');
+  }
+  const video = $('#scanVideo');
+  video.srcObject = scanStream;
+  $('#scanLayer').classList.add('on');
+  try { await video.play(); } catch (e) {}
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let busy = false;
+  const tick = () => {
+    if (!scanStream) return;
+    if (video.readyState >= video.HAVE_ENOUGH_DATA && video.videoWidth && !busy) {
+      busy = true;
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      busy = false;
+      if (code && code.data) return onDecoded(code.data);
+    }
+    scanRaf = requestAnimationFrame(tick);
+  };
+  scanRaf = requestAnimationFrame(tick);
+}
+
+$('#scanBtn').onclick = startScan;
+$('#scanClose').onclick = stopScan;
 </script>
 </body>
 </html>

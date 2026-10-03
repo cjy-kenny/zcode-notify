@@ -84,7 +84,7 @@ hook 对每轮回复结束都会触发；只想在特定工作区用的话，把
 - **鉴权**：写入（POST /notify）本机回环免口令，局域网需 `?token=`（服务首次启动
   自动生成，存 `state.json`）；读取不设限——v0.1 假定家庭 Wi-Fi 可信。
 - **防重复**：app 在前台看通知页时，网页自己响铃，前台服务不再弹系统通知。
-- **回程链接**：state.json 的 `remote_url`（管理面板可设，走 POST /config）非空时，每条通知自动带上 `link` 字段，手机通知页卡片出现「打开远程页面回复」按钮，点一下直达 ZCode 官方远程输入框——通知知进度，一键回话。远程会话换了在面板更新链接即可。
+- **回程链接**：state.json 的 `remote_url`（管理面板可设，走 POST /config）非空时，每条通知自动带上 `link` 字段，手机通知页卡片出现「打开远程页面回复」按钮，点一下直达 ZCode 官方远程输入框——通知知进度，一键回话。**远程会话换了不用手粘**：手机通知页右上角「扫码」对准 ZCode 桌面端的连接二维码，扫一下即更新（jsQR 本地解码，MIT，已随仓库附带 `web/jsqr.min.js`；APK 的 WebView 已放行摄像头权限）。
 - **历史**：服务端保留最近 200 条（`state.json`），手机端拉取 `/history` 渲染。
 - **APK**：无 Gradle 手工流水线（`android/build_apk.py`，优先复用随身编程项目的
   `_build` 工具链，缺失时自动回退本机 Android SDK），WebView 壳 + 前台服务（dataSync），
@@ -108,7 +108,8 @@ zcode-notify/
 ```
 
 仓库内已附带两个第三方文件，免去国内下载困难：`android/libs/org.eclipse.paho.client.mqttv3-1.2.5.jar`
-（Eclipse Paho MQTT 客户端，EPL/EDL 双许可）、`web/qr.min.js`（qrcodejs，MIT）。
+（Eclipse Paho MQTT 客户端，EPL/EDL 双许可）、`web/qr.min.js`（qrcodejs，MIT）、
+`web/jsqr.min.js`（jsQR 二维码识别，MIT）。
 
 ## 已实测 / 未实测
 
