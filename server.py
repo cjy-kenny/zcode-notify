@@ -28,6 +28,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(ROOT, 'web')
 STATE = os.path.join(ROOT, 'state.json')
 PORT = 8787
+PAGE_VERSION = '0.11'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
 MAX_HISTORY = 200
 
 _lock = threading.Lock()
@@ -278,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(WEB, filename), 'rb') as f:
                 data = f.read()
             data = data.replace(b'__TOKEN__', _token.encode())
+            data = data.replace(b'__PAGE_VERSION__', PAGE_VERSION.encode())
             self._send(code, 'text/html; charset=utf-8', data)
         except Exception as e:
             self._send(500, 'text/plain; charset=utf-8', ('页面缺失: %s' % e).encode('utf-8'))

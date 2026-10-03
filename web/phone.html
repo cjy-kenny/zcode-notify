@@ -130,7 +130,8 @@
 
   <footer>
     需与电脑连同一个 Wi-Fi · 服务地址 <span id="srv">…</span><br>
-    电脑端启动：双击 zcode-notify 目录下的 启动通知服务.bat
+    电脑端启动：双击 zcode-notify 目录下的 启动通知服务.bat<br>
+    页面版本 <b id="pgver">__PAGE_VERSION__</b>（页脚看不到这个 = 页面是旧的，刷新重开）
   </footer>
 
   <div id="scanLayer">
@@ -339,7 +340,8 @@ async function onDecoded(text) {
 }
 
 async function startScan() {
-  scanLog('start', 'secure=' + window.isSecureContext +
+  scanLog('start', 'pv=' + '__PAGE_VERSION__' +
+          ' secure=' + window.isSecureContext +
           ' jsqr=' + (typeof window.jsQR) +
           ' mediaDevices=' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) +
           ' bridge=' + !!(window.AndroidNotify));
