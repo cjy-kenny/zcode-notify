@@ -366,6 +366,26 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == '/config':
             return self._config()
+        if path == '/scanlog':
+            # 扫码调试：手机端每一步记一笔（scan_debug.log），盲修变精修
+            if not (self._loopback() or self._token_ok()):
+                return self._send(403, 'text/plain', b'forbidden')
+            try:
+                length = int(self.headers.get('Content-Length', 0) or 0)
+                data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+            except Exception:
+                data = {}
+            line = json.dumps({'ip': self.client_address[0], 'at': time.time(),
+                               'step': str(data.get('step'))[:40],
+                               'info': str(data.get('info'))[:200]}, ensure_ascii=False)
+            try:
+                with open(os.path.join(ROOT, 'scan_debug.log'), 'a', encoding='utf-8') as f:
+                    f.write(line + '\n')
+            except Exception:
+                pass
+            self.send_response(204)
+            self.end_headers()
+            return
         if path != '/notify':
             return self._send(404, 'text/plain', b'not found')
         if not (self._loopback() or self._token_ok()):

@@ -281,6 +281,14 @@ setInterval(render, 30000);   // 相对时间刷新
 /* ---------- 扫码更新远程链接 ---------- */
 let scanStream = null, scanRaf = 0;
 
+function scanLog(step, extra) {
+  try {   // 每一步上报服务端（scan_debug.log），远程定位扫码卡在哪
+    fetch('/scanlog', { method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step: step, info: extra || '' }) });
+  } catch (e) {}
+}
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -309,6 +317,7 @@ async function onDecoded(text) {
   if (/\/phone(\/|\?|$)/i.test(url)) {
     if (window.AndroidNotify && AndroidNotify.connectTo) {
       AndroidNotify.connectTo(url);
+      scanLog('apply-pair', url.slice(0, 80));
       toast('已配对电脑：' + url.replace(/^https?:\/\//, ''));
     } else {
       toast('网页版本身就是连接状态，无需配对');
@@ -321,24 +330,33 @@ async function onDecoded(text) {
       body: JSON.stringify({ remote_url: url })
     });
     if (!r.ok) throw 0;
+    scanLog('apply-remote-ok', url.slice(0, 80));
     toast('远程链接已更新 ✓ 之后的通知都带新链接');
   } catch (e) {
+    scanLog('apply-remote-fail', url.slice(0, 80));
     toast('链接已识别，但保存失败（服务器没连上？）');
   }
 }
 
 async function startScan() {
-  if (!window.jsQR || window.__nojsqr) return toast('解码库没加载成功，请在管理面板手动粘贴链接');
+  scanLog('start', 'secure=' + window.isSecureContext +
+          ' jsqr=' + (typeof window.jsQR) +
+          ' mediaDevices=' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) +
+          ' bridge=' + !!(window.AndroidNotify));
+  if (!window.jsQR || window.__nojsqr) { scanLog('err', 'jsqr-missing'); return toast('解码库没加载成功，请在管理面板手动粘贴链接'); }
   // getUserMedia 仅安全上下文（https/localhost）可用；WebView 里是 http://局域网IP，走拍照解码
   const liveOK = window.isSecureContext &&
                  navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
-  if (!liveOK) return photoScan();
+  if (!liveOK) { scanLog('branch', 'photo-fallback'); return photoScan(); }
+  scanLog('branch', 'live-camera');
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
     });
+    scanLog('cam-ok', '');
   } catch (e) {
     const n = (e && e.name) || '';
+    scanLog('cam-err', n + ' ' + (e && e.message || ''));
     if (n === 'NotAllowedError' || n === 'SecurityError')
       return toast('相机权限被拒绝：请在系统设置里允许本应用使用相机，然后重新点扫码');
     if (n === 'NotFoundError' || n === 'OverconstrainedError')
@@ -361,7 +379,7 @@ async function startScan() {
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
       busy = false;
-      if (code && code.data) return onDecoded(code.data);
+      if (code && code.data) { scanLog('decoded', String(code.data).slice(0, 80)); return onDecoded(code.data); }
     }
     scanRaf = requestAnimationFrame(tick);
   };
@@ -377,6 +395,7 @@ function photoScan() {
   inp.onchange = () => {
     const file = inp.files && inp.files[0];
     if (!file) return;
+    scanLog('photo-pick', (file.type || '') + ' ' + file.size);
     toast('识别中…');
     const img = new Image();
     const objURL = URL.createObjectURL(file);
@@ -394,10 +413,10 @@ function photoScan() {
         if (code && code.data) break;
       }
       URL.revokeObjectURL(objURL);
-      if (code && code.data) onDecoded(code.data);
-      else toast('没识别出二维码：离近一点、让码占满画面、避免反光再拍一张');
+      if (code && code.data) { scanLog('photo-decoded', ''); onDecoded(code.data); }
+      else { scanLog('photo-fail', 'scales-exhausted'); toast('没识别出二维码：离近一点、让码占满画面、避免反光再拍一张'); }
     };
-    img.onerror = () => { URL.revokeObjectURL(objURL); toast('照片读不出来，请重试'); };
+    img.onerror = () => { URL.revokeObjectURL(objURL); scanLog('photo-read-err', ''); toast('照片读不出来，请重试'); };
     img.src = objURL;
   };
   inp.click();
