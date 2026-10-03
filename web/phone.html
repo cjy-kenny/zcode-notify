@@ -321,7 +321,12 @@ async function startScan() {
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
     });
   } catch (e) {
-    return toast('相机没开成：请在系统设置里允许本应用使用相机');
+    const n = (e && e.name) || '';
+    if (n === 'NotAllowedError' || n === 'SecurityError')
+      return toast('相机权限被拒绝：请在系统设置里允许本应用使用相机，然后重新点扫码');
+    if (n === 'NotFoundError' || n === 'OverconstrainedError')
+      return toast('没找到可用的摄像头');
+    return toast('相机没开成：' + (n || e));
   }
   const video = $('#scanVideo');
   video.srcObject = scanStream;
@@ -359,17 +364,21 @@ function photoScan() {
     const img = new Image();
     const objURL = URL.createObjectURL(file);
     img.onload = () => {
-      const c = document.createElement('canvas');
-      const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
-      c.width = Math.round(img.width * scale);
-      c.height = Math.round(img.height * scale);
-      const ctx = c.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0, c.width, c.height);
+      // 屏幕照片常有摩尔纹/反光/角度：多尺度 + 反色各试一遍，识别率比单次高很多
+      let code = null;
+      for (const scale of [1, 0.5, 1.6]) {
+        const c = document.createElement('canvas');
+        c.width = Math.max(120, Math.round(img.width * scale));
+        c.height = Math.max(120, Math.round(img.height * scale));
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        const d = ctx.getImageData(0, 0, c.width, c.height);
+        code = jsQR(d.data, d.width, d.height, { inversionAttempts: 'attemptInverted' });
+        if (code && code.data) break;
+      }
       URL.revokeObjectURL(objURL);
-      const d = ctx.getImageData(0, 0, c.width, c.height);
-      const code = jsQR(d.data, d.width, d.height);
       if (code && code.data) onDecoded(code.data);
-      else toast('没识别出二维码，请离近一点、对正一点再拍');
+      else toast('没识别出二维码：离近一点、让码占满画面、避免反光再拍一张');
     };
     img.onerror = () => { URL.revokeObjectURL(objURL); toast('照片读不出来，请重试'); };
     img.src = objURL;

@@ -208,10 +208,18 @@ public class MainActivity extends Activity {
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == 2 && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED
-                && pendingCamRequest != null) {
-            pendingCamRequest.grant(pendingCamRequest.getResources());
+        if (requestCode == 2 && pendingCamRequest != null) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                pendingCamRequest.grant(pendingCamRequest.getResources());
+            } else {
+                // 拒绝（含"不再询问"）时扫码会死在这：直接带到系统设置让用户打开相机
+                Toast.makeText(this, "相机权限被拒绝，扫码用不了。正在打开应用设置，请允许相机后重试",
+                        Toast.LENGTH_LONG).show();
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", getPackageName(), null)));
+                } catch (Exception ignored) {}
+            }
             pendingCamRequest = null;
         }
     }
