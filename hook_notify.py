@@ -22,12 +22,24 @@ def _write_inbox(box):
         pass
 
 
+def _read_inbox():
+    """读收件箱；撞上服务器写入的瞬间就稍等重读一次（原子替换前用双保险）。"""
+    for attempt in range(2):
+        try:
+            with open(INBOX, encoding='utf-8') as f:
+                box = json.load(f)
+            return box if isinstance(box, list) else []
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.15)
+    return []
+
+
 def take_inbox(current_sid):
     """取走投递给本会话（或未指定目标）的手机消息；指定给其它话题的保留在收件箱。"""
     try:
-        with open(INBOX, encoding='utf-8') as f:
-            box = json.load(f)
-        if not isinstance(box, list) or not box:
+        box = _read_inbox()
+        if not box:
             return None
         now = time.time()
         deliver = [m for m in box

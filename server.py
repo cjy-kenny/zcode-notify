@@ -90,8 +90,10 @@ def load_inbox():
 
 def save_inbox(box):
     try:
-        with open(INBOX, 'w', encoding='utf-8') as f:
+        tmp = INBOX + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(box[-20:], f, ensure_ascii=False, indent=1)
+        os.replace(tmp, INBOX)   # 原子替换：hook 并发读永远读不到半截 JSON
     except Exception as e:
         print('inbox 写入失败:', e)
 
