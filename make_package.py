@@ -5,6 +5,7 @@
 """
 import glob
 import os
+import re
 import sys
 import zipfile
 
@@ -13,10 +14,14 @@ DIST = os.path.join(HERE, 'dist')
 
 
 def main():
-    apks = sorted(glob.glob(os.path.join(DIST, 'zcode-notify-v*.apk')))
+    def vkey(p):
+        m = re.search(r'v([\d.]+)\.apk$', os.path.basename(p))
+        return tuple(int(x) for x in m.group(1).split('.')) if m else (0,)
+
+    apks = sorted(glob.glob(os.path.join(DIST, 'zcode-notify-v*.apk')), key=vkey)
     if not apks:
         raise SystemExit('dist/ 里没有 APK，先运行 打包APK.bat')
-    apk = apks[-1]
+    apk = apks[-1]   # 按版本数值取最新（字典序会把 v0.10 排到 v0.9 前面）
     version = os.path.basename(apk)[len('zcode-notify-v'):-len('.apk')]
     out = os.path.join(DIST, 'ZCode任务通知-安装包-v%s.zip' % version)
 
