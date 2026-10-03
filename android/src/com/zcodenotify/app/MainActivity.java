@@ -65,6 +65,21 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        installCrashReporter();
+        // 上次异常退出的原因（没有 adb 时的土办法：崩溃首行下次启动带回）
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "last_crash.txt");
+            if (f.exists()) {
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f));
+                final String msg = r.readLine();
+                r.close();
+                f.delete();
+                if (msg != null && msg.length() > 0) {
+                    Toast.makeText(this, "上次异常退出：" + msg, Toast.LENGTH_LONG).show();
+                }
+            }
+        } catch (Exception ignored) {
+        }
 
         // Android 13+ 通知权限需要运行时申请
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -78,6 +93,18 @@ public class MainActivity extends Activity {
         web.getSettings().setDomStorageEnabled(true);
         web.setBackgroundColor(0xFF0B0E14);
         web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                // 页面只待在回环地址上（安全上下文是扫码开相机的前提）；
+                // 主框架点到的外部链接一律交给系统浏览器，WebView 永不跳走
+                if (req != null && req.isForMainFrame()
+                        && !"127.0.0.1".equals(req.getUrl().getHost())) {
+                    openExternal(req.getUrl().toString());
+                    return true;
+                }
+                return false;
+            }
+
             @Override
             public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                 if (req != null && req.isForMainFrame()) {
@@ -239,10 +266,63 @@ public class MainActivity extends Activity {
         public void visible(boolean v) {
             MainActivity.pageVisible = v;
         }
+
+        /** 通知卡片上的「打开远程页面回复」：交给系统浏览器开，WebView 不导航。 */
+        @JavascriptInterface
+        public void openRemote(String u) {
+            openExternal(u);
+        }
+
+        /** 扫码配对：二维码里是电脑手机端地址时，网页调它完成连接并刷新页面。 */
+        @JavascriptInterface
+        public void connectTo(String u) {
+            try {
+                if (u == null) return;
+                final String url = u.trim();
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+                prefs().edit().putString("url", url).apply();
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        Toast.makeText(MainActivity.this, "已扫码连接电脑", Toast.LENGTH_SHORT).show();
+                        refresh();
+                    }
+                });
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void openExternal(String u) {
+        try {
+            if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception e) {
+            Toast.makeText(this, "没有能打开这个链接的应用", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private SharedPreferences prefs() {
         return getSharedPreferences("zcodenotify", MODE_PRIVATE);
+    }
+
+    /** 崩溃时把异常存到 filesDir，下次启动 Toast 首行——用户口述"闪退"也能拿到原因。 */
+    private void installCrashReporter() {
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override public void uncaughtException(Thread t, Throwable e) {
+                try {
+                    java.io.FileWriter fw = new java.io.FileWriter(
+                            new java.io.File(getFilesDir(), "last_crash.txt"), false);
+                    fw.write(e.getClass().getSimpleName() + ": "
+                            + (e.getMessage() == null ? "" : e.getMessage())
+                            + "\n" + android.util.Log.getStackTraceString(e));
+                    fw.close();
+                } catch (Exception ignored) {
+                }
+                if (prev != null) prev.uncaughtException(t, e);
+            }
+        });
     }
 
     private void refresh() {

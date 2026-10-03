@@ -90,7 +90,7 @@
   .nbody { font-size: 14px; line-height: 1.55; color: #b8c2d4; word-break: break-all; }
   .more { font-size: 12px; color: #ffab8a; margin-top: 8px; }
   .reply {
-    display: block; margin-top: 10px; text-align: center; text-decoration: none;
+    display: block; margin-top: 10px; text-align: center; text-decoration: none; cursor: pointer;
     font-size: 13px; font-weight: 600; color: #fff;
     background: linear-gradient(160deg, #cf430d, #b53708);   /* 加深一档：白字对比度 ≥4.5:1 */
     border-radius: 10px; padding: 9px 12px;
@@ -134,7 +134,7 @@
   </footer>
 
   <div id="scanLayer">
-    <div id="scanTip">对准 ZCode 桌面端的远程连接二维码</div>
+    <div id="scanTip">对准电脑控制台的二维码可扫码配对；其它链接（如 zcode.z.ai/remote）会设为远程页面链接</div>
     <video id="scanVideo" muted playsinline autoplay></video>
     <button id="scanClose">关闭</button>
   </div>
@@ -168,7 +168,7 @@ function render() {
     const chip = it.project ? '<span class="chip">' + esc(it.project) + '</span>' : '<span></span>';
     const hasFull = it.full && it.full.length > (it.body || '').length + 10;
     const reply = it.link
-      ? '<a class="reply" href="' + esc(it.link) + '" target="_blank" rel="noopener">打开远程页面回复 ▸</a>'
+      ? '<div class="reply" data-url="' + esc(it.link) + '">打开远程页面回复 ▸</div>'
       : '';
     card.innerHTML =
       '<div class="row">' + chip + '<span class="time">' + timefmt(it.ts) + '</span></div>' +
@@ -184,6 +184,13 @@ function render() {
         card.querySelector('.more').textContent = open ? '收起 ▴' : '点开看全文 ▾';
       });
     }
+    const rp = card.querySelector('.reply');
+    if (rp) rp.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const u = rp.getAttribute('data-url');
+      if (window.AndroidNotify && AndroidNotify.openRemote) AndroidNotify.openRemote(u);
+      else window.open(u, '_blank', 'noopener');
+    });
     list.appendChild(card);
   }
   $('#empty').style.display = items.length ? 'none' : 'block';
@@ -298,6 +305,16 @@ async function onDecoded(text) {
   stopScan();
   const url = String(text || '').trim();
   if (!/^https?:\/\//i.test(url)) return scanFailed('二维码内容不是链接');
+  // 两种语义：指向通知服务的码 → 扫码配对；其它链接（如 zcode.z.ai/remote/...）→ 设为远程页面链接
+  if (/\/phone(\/|\?|$)/i.test(url)) {
+    if (window.AndroidNotify && AndroidNotify.connectTo) {
+      AndroidNotify.connectTo(url);
+      toast('已配对电脑：' + url.replace(/^https?:\/\//, ''));
+    } else {
+      toast('网页版本身就是连接状态，无需配对');
+    }
+    return;
+  }
   try {
     const r = await fetch('/config?token=' + encodeURIComponent(TOKEN), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
