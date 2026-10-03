@@ -128,8 +128,71 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
 
+        startLoopbackForward();   // WebView 从 127.0.0.1 加载页面才是安全上下文，扫码才能开实时摄像头
         refresh();
         NotifyService.start(this);
+    }
+
+    // ------------------------------------------------- 本地回环转发（扫码的前提）
+
+    /** WebView 侧固定走这个端口的回环地址，每个连接动态转发到 prefs 里存的电脑地址。 */
+    private static final int LOOPBACK_PORT = 8790;
+
+    /** 在 127.0.0.1:8790 起一个 TCP 转发器：http://127.0.0.1 属安全上下文，网页才能 getUserMedia。 */
+    private void startLoopbackForward() {
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    java.net.ServerSocket ss = new java.net.ServerSocket(
+                            LOOPBACK_PORT, 50, java.net.InetAddress.getByName("127.0.0.1"));
+                    while (true) {
+                        final java.net.Socket client = ss.accept();
+                        new Thread(new Runnable() {
+                            public void run() { pump(client); }
+                        }).start();
+                    }
+                } catch (Exception e) {
+                    // 端口被占说明上一个实例的转发器还在，直接复用即可
+                }
+            }
+        }, "loopback-forward").start();
+    }
+
+    /** 单个回环连接 -> 电脑 8787：双向搬运，每块即刷（SSE 长连接依赖）。 */
+    private void pump(java.net.Socket client) {
+        java.net.Socket remote = null;
+        try {
+            URL u = new URL(prefs().getString("url", ""));
+            remote = new java.net.Socket();
+            remote.connect(new java.net.InetSocketAddress(u.getHost(),
+                    u.getPort() > 0 ? u.getPort() : 80), 3000);
+            final java.net.Socket r = remote;
+            Thread up = new Thread(new Runnable() { public void run() { copy(client, r); } });
+            Thread down = new Thread(new Runnable() { public void run() { copy(r, client); } });
+            up.start(); down.start();
+            up.join(); down.join();
+        } catch (Exception e) {
+        } finally {
+            try { client.close(); } catch (Exception e2) {}
+            if (remote != null) try { remote.close(); } catch (Exception e2) {}
+        }
+    }
+
+    private static void copy(java.net.Socket in, java.net.Socket out) {
+        byte[] buf = new byte[8192];
+        try {
+            java.io.InputStream is = in.getInputStream();
+            java.io.OutputStream os = out.getOutputStream();
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                os.write(buf, 0, n);
+                os.flush();
+            }
+        } catch (Exception e) {
+        } finally {
+            try { in.close(); } catch (Exception e2) {}
+            try { out.close(); } catch (Exception e2) {}
+        }
     }
 
     @Override
@@ -178,7 +241,9 @@ public class MainActivity extends Activity {
         String url = prefs().getString("url", "");
         if (url.length() > 0) {
             setupView.setVisibility(View.GONE);
-            web.loadUrl(url);
+            // 页面从回环转发加载（127.0.0.1 为安全上下文）：prefs 里存的仍是真实电脑地址，
+            // 转发器逐连接动态读取它，电脑 IP 变了重连即恢复
+            web.loadUrl("http://127.0.0.1:" + LOOPBACK_PORT + "/phone");
         } else {
             setupView.setVisibility(View.VISIBLE);
             autoSearch();

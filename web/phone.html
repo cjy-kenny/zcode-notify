@@ -321,7 +321,7 @@ async function startScan() {
       video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
     });
   } catch (e) {
-    return photoScan();   // 权限被拒也能拍照（用系统相机）
+    return toast('相机没开成：请在系统设置里允许本应用使用相机');
   }
   const video = $('#scanVideo');
   video.srcObject = scanStream;
