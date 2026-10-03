@@ -16,6 +16,7 @@ import json
 import os
 import queue
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -34,7 +35,9 @@ _history = []            # [{id,title,body,project,ts}]
 _token = ''              # 写接口（局域网 POST /notify）的口令，首次启动生成
 
 BROKER_HOST = 'broker.emqx.io'   # 公网 MQTT 中转（跨网络推送）；可改成自建 mosquitto 地址
+BROKER_TLS_PORT = 8883           # MQTTS 优先，连不上自动回退 1883 明文
 BROKER_PORT = 1883
+_broker_mode = ['tls']           # 记住上次成功的连接方式，避免每次都白等一次回退
 _mqtt_topic = ''                 # 订阅码：手机端凭它订阅公网通道，随机生成即机密
 _mqtt_q = queue.Queue(maxsize=100)
 
@@ -195,6 +198,21 @@ def _recv_exact(s, n):
     return buf
 
 
+def _connect_broker(timeout=5):
+    """连 broker：MQTTS(8883) 优先，失败自动回退明文(1883)。"""
+    if _broker_mode[0] == 'tls':
+        try:
+            raw = socket.create_connection((BROKER_HOST, BROKER_TLS_PORT), timeout=timeout)
+            s = ssl.create_default_context().wrap_socket(raw, server_hostname=BROKER_HOST)
+            s.settimeout(timeout)
+            return s
+        except Exception:
+            _broker_mode[0] = 'plain'
+    s = socket.create_connection((BROKER_HOST, BROKER_PORT), timeout=timeout)
+    s.settimeout(timeout)
+    return s
+
+
 def mqtt_publish_once(topic, payload):
     """极简 MQTT 3.1.1（纯标准库）：CONNECT → PUBLISH(QoS1) → 等 PUBACK → 断开。
 
@@ -206,9 +224,8 @@ def mqtt_publish_once(topic, payload):
     pub_vh = _enc_str(topic) + (1).to_bytes(2, 'big')
     pub = bytes([0x32]) + _enc_len(len(pub_vh) + len(payload)) + pub_vh + payload
 
-    s = socket.create_connection((BROKER_HOST, BROKER_PORT), timeout=5)
+    s = _connect_broker()
     try:
-        s.settimeout(5)
         s.sendall(connect)
         ack = _recv_exact(s, 4)
         if ack[0] != 0x20 or ack[3] != 0:
@@ -355,6 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             'id': os.urandom(4).hex(),
             'title': str(data.get('title') or 'ZCode 通知')[:80],
             'body': str(data.get('body') or '')[:500],
+            'full': str(data.get('full') or '')[:2000],   # 完整文本，手机卡片点开看
             'project': str(data.get('project') or '')[:40],
             'ts': time.time(),
         }

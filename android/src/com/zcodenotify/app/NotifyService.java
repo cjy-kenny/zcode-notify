@@ -35,7 +35,8 @@ public class NotifyService extends Service {
     private static final String CH_TASK = "zcode_task";
     private static final String CH_SVC = "zcode_service";
     private static final int SVC_NOTIF_ID = 1;
-    private static final String BROKER = "tcp://broker.emqx.io:1883";
+    private static final String BROKER_TLS = "ssl://broker.emqx.io:8883";  // 优先加密
+    private static final String BROKER_TCP = "tcp://broker.emqx.io:1883";  // TLS 连不上自动回退
 
     private volatile boolean running = false;
     private Thread worker;
@@ -95,6 +96,17 @@ public class NotifyService extends Service {
 
     private SharedPreferences prefs() {
         return getSharedPreferences(PREF, MODE_PRIVATE);
+    }
+
+    /** 固定 clientId：持久会话（cleanSession=false）依赖它，换设备/重装才变。 */
+    private String clientId() {
+        SharedPreferences sp = prefs();
+        String cid = sp.getString("mqtt_cid", "");
+        if (cid.length() == 0) {
+            cid = "zcode-ph-" + randomHex();
+            sp.edit().putString("mqtt_cid", cid).apply();
+        }
+        return cid;
     }
 
     private void channels() {
@@ -190,35 +202,50 @@ public class NotifyService extends Service {
                             }
                             if (topic.length() == 0) { sleep(8000); continue; }
                         }
-                        if (mqttClient == null) {
-                            mqttClient = new MqttClient(BROKER,
-                                    "zcode-ph-" + randomHex(), new MemoryPersistence());
-                            mqttClient.setCallback(new MqttCallbackExtended() {
-                                public void connectComplete(boolean reconnect, String serverURI) {
-                                    try {
-                                        mqttClient.subscribe(prefs().getString("mqtt", ""), 1);
-                                    } catch (Exception ignored) {
+                        // MQTTS 优先、明文回退；持久会话让离线期间的 QoS1 消息上线后补投
+                        boolean ok = false;
+                        for (String uri : new String[]{BROKER_TLS, BROKER_TCP}) {
+                            try {
+                                if (mqttClient == null || !uri.equals(mqttClient.getServerURI())) {
+                                    if (mqttClient != null) {
+                                        try { mqttClient.close(); } catch (Exception ignored) {}
                                     }
-                                }
+                                    mqttClient = new MqttClient(uri, clientId(), new MemoryPersistence());
+                                    mqttClient.setCallback(new MqttCallbackExtended() {
+                                        public void connectComplete(boolean reconnect, String serverURI) {
+                                            try {
+                                                mqttClient.subscribe(prefs().getString("mqtt", ""), 1);
+                                            } catch (Exception ignored) {
+                                            }
+                                        }
 
-                                public void connectionLost(Throwable e) {
-                                }
+                                        public void connectionLost(Throwable e) {
+                                        }
 
-                                public void messageArrived(String t, MqttMessage m) {
-                                    handle(new String(m.getPayload(), StandardCharsets.UTF_8));
-                                }
+                                        public void messageArrived(String t, MqttMessage m) {
+                                            handle(new String(m.getPayload(), StandardCharsets.UTF_8));
+                                        }
 
-                                public void deliveryComplete(IMqttDeliveryToken token) {
+                                        public void deliveryComplete(IMqttDeliveryToken token) {
+                                        }
+                                    });
                                 }
-                            });
+                                MqttConnectOptions opts = new MqttConnectOptions();
+                                opts.setCleanSession(false);
+                                opts.setConnectionTimeout(8);
+                                opts.setKeepAliveInterval(60);
+                                opts.setAutomaticReconnect(true);
+                                if (uri.startsWith("ssl://")) {
+                                    opts.setSocketFactory(javax.net.ssl.SSLSocketFactory.getDefault());
+                                }
+                                mqttClient.connect(opts);
+                                ok = true;
+                                break;
+                            } catch (Exception e) {
+                                // 这条路不通（比如老设备 TLS 握手失败），试下一条
+                            }
                         }
-                        MqttConnectOptions opts = new MqttConnectOptions();
-                        opts.setCleanSession(true);
-                        opts.setConnectionTimeout(10);
-                        opts.setKeepAliveInterval(60);
-                        opts.setAutomaticReconnect(true);
-                        mqttClient.connect(opts);
-                        sleep(10000);   // 已连上，交给自动重连托管；慢循环看护
+                        sleep(ok ? 10000 : 8000);   // 连上交给自动重连托管；没连上过会儿再试
                     } catch (Exception e) {
                         sleep(8000);    // 没网/没配好：过会儿再试
                     }
@@ -264,6 +291,10 @@ public class NotifyService extends Service {
             JSONObject o = new JSONObject(json);
             String id = o.optString("id", String.valueOf(System.currentTimeMillis()));
             if (!markSeen(id)) return;   // 双通道重复投递，丢弃第二条
+            double ts = o.optDouble("ts", 0);
+            if (ts > 0 && System.currentTimeMillis() / 1000.0 - ts > 1800) {
+                return;   // 离线补投的过期消息（超过 30 分钟）不弹
+            }
             String title = o.optString("title", "ZCode 通知");
             String body = o.optString("body", "");
             notifyTask(id, title, body);

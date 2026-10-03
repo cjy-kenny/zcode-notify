@@ -12,8 +12,8 @@ import urllib.request
 PORT = 8787
 
 
-def last_summary(transcript_path):
-    """从会话转录 JSONL 里取最后一段助手回复，前 60 字做摘要（读不到就返回空）。"""
+def last_text(transcript_path, cap=1500):
+    """取会话转录里最后一段助手回复的全文（截 cap 字）；读不到返回空。"""
     try:
         with open(transcript_path, encoding='utf-8') as f:
             lines = f.readlines()
@@ -33,8 +33,7 @@ def last_summary(transcript_path):
                 continue
             text = ' '.join(t for t in texts if t).strip()
             if text:
-                text = text.replace('\n', ' ')
-                return (text[:60] + '…') if len(text) > 60 else text
+                return text.replace('\n', ' ')[:cap]
     except Exception:
         pass
     return ''
@@ -50,19 +49,23 @@ def main():
         ev = {}
     cwd = ev.get('cwd') or os.environ.get('ZCODE_PROJECT_DIR') or os.getcwd()
     project = os.path.basename(str(cwd).rstrip('\\/')) or 'ZCode'
+    if project.lower() in ('default', 'workspace', 'zcode'):
+        project = 'ZCode'   # 默认工作区名没信息量，统一显示 ZCode
     if mode == 'start':
         prompt = str(ev.get('prompt') or ev.get('user_prompt') or '').replace('\n', ' ').strip()
         title = 'ZCode 收到新任务'
         body = '「%s」开始处理' % project
         if prompt:
             body += '：' + (prompt[:60] + '…' if len(prompt) > 60 else prompt)
+        full = prompt[:1500]
     else:
-        summary = last_summary(ev.get('transcript_path') or ev.get('transcriptPath') or '')
+        text = last_text(ev.get('transcript_path') or ev.get('transcriptPath') or '')
         title = 'ZCode 任务完成'
         body = '「%s」执行完毕' % project
-        if summary:
-            body += '：' + summary
-    payload = json.dumps({'title': title, 'body': body, 'project': project},
+        if text:
+            body += '：' + (text[:60] + '…' if len(text) > 60 else text)
+        full = text
+    payload = json.dumps({'title': title, 'body': body, 'full': full, 'project': project},
                          ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request('http://127.0.0.1:%d/notify' % PORT, data=payload,
                                  headers={'Content-Type': 'application/json'})

@@ -55,7 +55,8 @@
 用户级 `~/.zcode/cli/config.json` 已注册两个 hook（`hooks.enabled: true`，
 `process` 类型直调 Python，5s 超时，服务没开则静默跳过）：
 **UserPromptSubmit**（收到新任务，args 带 `start` 参数）和 **Stop**（任务完成，
-含摘要提取）。通知服务没开时两者都静默跳过。
+含摘要提取）。通知服务没开时两者都静默跳过。**注意：ZCode 在会话启动时读取
+hooks 配置，改完要新开会话才生效。**
 
 ```json
 { "hooks": { "enabled": true, "events": { "Stop": [

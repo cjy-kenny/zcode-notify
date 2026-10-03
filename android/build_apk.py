@@ -17,7 +17,7 @@ BT = os.path.join(TOOLCHAIN, 'android-14')
 PLAT_JAR = os.path.join(TOOLCHAIN, 'android-34', 'android.jar')
 OUT = os.path.join(HERE, 'build')
 DIST = os.path.join(PROJECT, 'dist')
-VERSION = '0.3'
+VERSION = '0.4'
 APK = os.path.join(DIST, 'zcode-notify-v%s.apk' % VERSION)
 LIBS = glob.glob(os.path.join(HERE, 'libs', '*.jar'))   # 第三方 jar（如 Paho MQTT）
 
