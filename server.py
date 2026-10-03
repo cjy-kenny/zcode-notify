@@ -452,6 +452,25 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 return self._send(400, 'text/plain; charset=utf-8', 'text 必填'.encode('utf-8'))
             sid = str(data.get('sid') or '')[:64]   # 空 = 自动（最新活跃会话）
+            # 分发选路：ZCode 空闲 → 直接打进桌面窗口（瞬时起回合）；
+            # 忙碌（有会话在干活）→ 收件箱，回合边界的工具调用间隙注入
+            busy = any(v.get('busy') for v in load_sessions().values())
+            via = 'inbox'
+            if not busy:
+                try:
+                    import desktop_inject
+                    if desktop_inject.type_into_zcode(text):
+                        via = 'desktop'
+                        print('[手机消息] 已输入桌面窗口: %s' % text[:80], flush=True)
+                except Exception as e:
+                    print('[手机消息] 桌面注入失败，转收件箱:', e, flush=True)
+            if via == 'desktop':
+                broadcast({'id': os.urandom(4).hex(), 'title': '📱→💻 手机消息',
+                           'body': text + '（已输入桌面 ZCode，任务开始）',
+                           'kind': 'sent', 'sid': sid, 'ts': time.time()})
+                return self._send(200, 'application/json; charset=utf-8',
+                                  json.dumps({'ok': True, 'via': 'desktop'},
+                                             ensure_ascii=False).encode('utf-8'))
             with _lock:
                 box = load_inbox()
                 box.append({'text': text, 'ts': time.time(),
@@ -478,6 +497,7 @@ class Handler(BaseHTTPRequestHandler):
                     d = load_sessions()
                     d[sid] = {'label': str(data.get('label') or '')[:40],
                               'cwd': str(data.get('cwd') or '')[:200],
+                              'busy': bool(data.get('busy')),
                               'last': time.time()}
                     cutoff = time.time() - 7 * 86400
                     d = {k: v for k, v in d.items() if v.get('last', 0) > cutoff}

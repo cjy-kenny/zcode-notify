@@ -58,15 +58,17 @@ def take_inbox(current_sid):
     return box
 
 
-def see_session(ev, cwd):
-    """向服务器上报本会话（sid + 项目名），手机端「选择话题」的数据源。"""
+def see_session(ev, cwd, busy=None):
+    """向服务器上报本会话（sid + 项目名 + 忙碌状态），手机端「选择话题」的数据源。"""
     sid = str(ev.get('session_id') or ev.get('sessionId') or '')[:64]
     if not sid:
         return
     try:
+        payload = {'sid': sid, 'cwd': cwd}
+        if busy is not None:
+            payload['busy'] = bool(busy)
         req = urllib.request.Request('http://127.0.0.1:%d/session-see' % PORT,
-                                     data=json.dumps({'sid': sid, 'cwd': cwd},
-                                                     ensure_ascii=False).encode('utf-8'),
+                                     data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
                                      headers={'Content-Type': 'application/json'})
         urllib.request.urlopen(req, timeout=1)
     except Exception:
@@ -117,6 +119,7 @@ def main():
     see_session(ev, cwd)
     if mode == 'pre':
         # 回合进行中：每次工具调用前注入手机消息（additionalContext，不影响工具本身）
+        see_session(ev, cwd, busy=True)
         box = take_inbox(sid)
         if box:
             lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
@@ -131,6 +134,7 @@ def main():
             debug_log('pre', sid, 'empty')
         return 0
     if mode == 'start':
+        see_session(ev, cwd, busy=True)   # 回合开始：标记会话忙碌
         prompt = str(ev.get('prompt') or ev.get('user_prompt') or '').replace('\n', ' ').strip()
         title = 'ZCode 收到新任务'
         body = '「%s」开始处理' % project
@@ -138,6 +142,7 @@ def main():
             body += '：' + (prompt[:60] + '…' if len(prompt) > 60 else prompt)
         full = prompt[:1500]
     else:
+        see_session(ev, cwd, busy=False)   # 回合结束：会话回到空闲
         # 反向通道：收件箱有投给本会话（或未指定目标）的手机消息 → 以「续跑指令」
         # 形式注入会话（本轮不算完成，不发完成通知；ZCode 处理完消息、真正结束时才发）
         box = take_inbox(sid)

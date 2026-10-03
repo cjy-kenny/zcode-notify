@@ -1,2 +1,10 @@
 {"at": 1791039801.9979405, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
 {"at": 1791039822.2052581, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040096.7377112, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040096.7657652, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "deliver 1"}
+{"at": 1791040111.6076047, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040132.7417266, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040176.7001252, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040216.904067, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791040216.9430852, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "deliver 2"}
+{"at": 1791040277.8868775, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}

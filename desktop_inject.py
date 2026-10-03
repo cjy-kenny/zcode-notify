@@ -1,0 +1,129 @@
+# -*- coding: utf-8 -*-
+"""把一条消息"打"进 ZCode 桌面窗口：等价于用户亲手输入，空闲时也能立刻起回合。
+
+做法：找到 ZCode 主窗口 → 拉到前台 → 消息放进剪贴板 → Ctrl+V → Enter → 还原剪贴板。
+全部 ctypes 实现，失败静默返回 False（调用方回退到收件箱路线）。
+"""
+import ctypes
+import subprocess
+import time
+from ctypes import wintypes
+
+user32 = ctypes.windll.user32
+
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE = 0x0002
+VK_CONTROL = 0x11
+VK_V = 0x56
+VK_RETURN = 0x0D
+KEYEVENTF_KEYUP = 0x0002
+
+
+def _pids_by_name(name='ZCode.exe'):
+    try:
+        tl = subprocess.run(['tasklist'], capture_output=True).stdout.decode('utf-8', 'replace')
+        return [l.split()[1] for l in tl.splitlines() if l.startswith(name)]
+    except Exception:
+        return []
+
+
+def find_window():
+    """返回 ZCode 主窗口句柄（可见、有标题、属于 ZCode.exe 的最上层窗口）。"""
+    pids = set(_pids_by_name())
+    if not pids:
+        return None
+    result = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if str(pid.value) in pids:
+                buf = ctypes.create_unicode_buffer(256)
+                user32.GetWindowTextW(hwnd, buf, 256)
+                if buf.value.strip():
+                    result.append((hwnd, buf.value))
+        return True
+
+    user32.EnumWindows(cb, 0)
+    return result[0][0] if result else None
+
+
+def _clip_get():
+    """读剪贴板文本（读不到返回空串）。"""
+    try:
+        if not user32.OpenClipboard(None):
+            return ''
+        try:
+            h = user32.GetClipboardData(CF_UNICODETEXT)
+            if not h:
+                return ''
+            p = ctypes.windll.kernel32.GlobalLock(h)
+            if not p:
+                return ''
+            try:
+                return ctypes.c_wchar_p(p).value or ''
+            finally:
+                ctypes.windll.kernel32.GlobalUnlock(h)
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return ''
+
+
+def _clip_set(text):
+    """写剪贴板文本。"""
+    user32.OpenClipboard(None)
+    try:
+        user32.EmptyClipboard()
+        h = ctypes.windll.kernel32.GlobalAlloc(GMEM_MOVEABLE, (len(text) + 1) * 2)
+        p = ctypes.windll.kernel32.GlobalLock(h)
+        ctypes.memmove(p, ctypes.create_unicode_buffer(text), (len(text) + 1) * 2)
+        ctypes.windll.kernel32.GlobalUnlock(h)
+        user32.SetClipboardData(CF_UNICODETEXT, h)
+    finally:
+        user32.CloseClipboard()
+
+
+def _key(vk, up=False):
+    user32.keybd_event(vk, 0, KEYEVENTF_KEYUP if up else 0, 0)
+
+
+def _paste():
+    _key(VK_CONTROL)
+    time.sleep(0.03)
+    _key(VK_V)
+    time.sleep(0.03)
+    _key(VK_V, up=True)
+    _key(VK_CONTROL, up=True)
+
+
+def type_into_zcode(text):
+    """把消息输入 ZCode 桌面窗口并回车发送。成功返回 True。"""
+    try:
+        win = find_window()
+        if not win:
+            return False
+        hwnd = win
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)   # SW_RESTORE
+        # Alt 按下再弹起：绕过 SetForegroundWindow 的前台锁
+        _key(0x12)
+        user32.SetForegroundWindow(hwnd)
+        _key(0x12, up=True)
+        time.sleep(0.3)
+        old = _clip_get()
+        for attempt in range(3):
+            if _clip_set('【手机消息】' + text):
+                break
+            time.sleep(0.2)
+        time.sleep(0.1)
+        _paste()
+        time.sleep(0.15)
+        _key(VK_RETURN)
+        time.sleep(0.1)
+        _clip_set(old)   # 还原用户剪贴板
+        return True
+    except Exception:
+        return False

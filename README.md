@@ -89,13 +89,32 @@ hook 对每轮回复结束都会触发；只想在特定工作区用的话，把
 - **APK**：无 Gradle 手工流水线（`android/build_apk.py`，优先复用随身编程项目的
   `_build` 工具链，缺失时自动回退本机 Android SDK），WebView 壳 + 前台服务（dataSync），
   debug 签名，minSdk 24。
+- **反向通道**：手机页底部输入框发消息 → `POST /send` 存入收件箱（500 字上限）→
+  hook 在回合边界经 HTTP `/inbox-take?sid=` 取走（收件箱文件只有服务器一份，脚本
+  副本可以多份，杜绝路径错位）→ 以 `continue:true + stopReason +
+  hookSpecificOutput(Stop.additionalContext)` 注入会话——**ZCode 的 Stop 续跑键是
+  `continue:true`**（读自其运行时 `glm/zcode.cjs` 的 Lio 函数，Claude Code 式
+  `decision:block` 不生效）→ ZCode 继续处理 → 完成通知回手机。
+- **话题选择**：hook 在开始/结束时向 `/session-see` 上报会话（sid + 项目名），
+  发送框上方「话题」芯片列出最近活跃会话；消息可定向投递（sid 精确匹配）或
+  「自动」（谁先结束回合投给谁），定向消息 24h 未消费自动过期。
+
+## 手机反向指挥（发消息给 ZCode）
+
+手机页底部输入框发消息，电脑上的 ZCode 会在**回合边界**收到并继续干活：
+
+- **任务正在跑时发** → 实时插入：当前回合的下次工具调用前注入（PreToolUse hook，
+  注册后需重启一次 ZCode 生效），干完手头这步就执行你的指令；
+- **ZCode 空闲时发** → 排队：下一个回合边界自动送达（在电脑或官方远程页面随便说句
+  话即可触发边界），消息保留 24 小时；
+- 每条消息的投递与注入都有流水可查：服务器侧 `delivered.log`、hook 侧 `hook_debug.log`。
 
 ## 文件结构
 
 ```
 zcode-notify/
 ├── server.py            服务端（单文件，零依赖）
-├── hook_notify.py       ZCode Stop hook 回调脚本
+├── hook_notify.py       ZCode hook 回调脚本（开始/完成推送 + 手机消息注入）
 ├── selftest.py          一键自测
 ├── gen_icon.py          图标生成（纯标准库写 PNG）
 ├── 启动通知服务.bat       电脑端启动入口
@@ -104,7 +123,7 @@ zcode-notify/
 ├── make_package.py       打手机传输压缩包（微信传 zip 不改名，内附使用说明）
 ├── web/                 手机端页面 + 控制台 + PWA 清单
 ├── android/             WebView 壳 + 前台服务 + MQTT 订阅 + 构建流水线
-└── dist/                zcode-notify-v0.3.apk + ZCode任务通知-安装包-v0.3.zip（微信传输用）
+└── dist/                zcode-notify-v0.11.apk + ZCode任务通知-安装包-v0.11.zip（微信传输用）
 ```
 
 仓库内已附带两个第三方文件，免去国内下载困难：`android/libs/org.eclipse.paho.client.mqttv3-1.2.5.jar`
@@ -126,9 +145,9 @@ zcode-notify/
   两个常量可改成自建 mosquitto）；手机离线时的消息不补投（clean session）；电脑关机
   或服务没开就收不到；部分国产 ROM 会杀后台/拦自启，可把 app 加白名单
 
-## v0.4 候选
+## v0.5 候选
 
-自建/加密中转（MQTTS 或自托管 mosquitto，公共实例只作默认兜底）、离线消息补投
-（persistent session）、任务失败提醒（PostToolUseFailure）、图标与通知渠道细节、
-iOS 侧（Bark 对接）。~~通知里加"查看回复全文"链接~~（full 字段已带全文）、
-~~回程链接~~（已实现：remote_url + 手机端按钮）。
+自托管 mosquitto（公共实例只作默认兜底）、任务失败提醒（PostToolUseFailure，需防刷屏）、
+多设备/多项目路由、空闲时秒起任务（调研 ZCode 命令行/自动化入口）、图标与通知渠道细节、
+iOS 侧（Bark 对接）。~~反向通道~~（已实现：/send 收件箱 + continue:true 注入 + 话题选择）、
+~~离线消息补投~~（persistent session）、~~MQTTS~~、~~通知全文~~。
