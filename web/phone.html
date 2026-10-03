@@ -59,6 +59,13 @@
   .ntitle { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
   .nbody { font-size: 14px; line-height: 1.55; color: #b8c2d4; word-break: break-all; }
   .more { font-size: 12px; color: #ffab8a; margin-top: 8px; }
+  .reply {
+    display: block; margin-top: 10px; text-align: center; text-decoration: none;
+    font-size: 13px; font-weight: 600; color: #fff;
+    background: linear-gradient(160deg, #cf430d, #b53708);   /* 加深一档：白字对比度 ≥4.5:1 */
+    border-radius: 10px; padding: 9px 12px;
+  }
+  .reply:active { transform: translateY(1px); }
 
   #empty { text-align: center; padding: 90px 0 0; display: none; }
   #empty .bell { font-size: 54px; opacity: .5; }
@@ -117,14 +124,18 @@ function render() {
     card.className = 'card';
     const chip = it.project ? '<span class="chip">' + esc(it.project) + '</span>' : '<span></span>';
     const hasFull = it.full && it.full.length > (it.body || '').length + 10;
+    const reply = it.link
+      ? '<a class="reply" href="' + esc(it.link) + '" target="_blank" rel="noopener">打开远程页面回复 ▸</a>'
+      : '';
     card.innerHTML =
       '<div class="row">' + chip + '<span class="time">' + timefmt(it.ts) + '</span></div>' +
       '<div class="ntitle">' + esc(it.title) + '</div>' +
       '<div class="nbody">' + esc(it.body || '') + '</div>' +
-      (hasFull ? '<div class="more">点开看全文 ▾</div>' : '');
+      (hasFull ? '<div class="more">点开看全文 ▾</div>' : '') + reply;
     if (hasFull) {
       let open = false;
-      card.addEventListener('click', () => {
+      card.addEventListener('click', e => {
+        if (e.target.closest('.reply')) return;   // 不让展开全文的点击干扰按钮跳转
         open = !open;
         card.querySelector('.nbody').textContent = open ? it.full : it.body;
         card.querySelector('.more').textContent = open ? '收起 ▴' : '点开看全文 ▾';

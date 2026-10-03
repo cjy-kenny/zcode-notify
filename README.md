@@ -84,9 +84,11 @@ hook 对每轮回复结束都会触发；只想在特定工作区用的话，把
 - **鉴权**：写入（POST /notify）本机回环免口令，局域网需 `?token=`（服务首次启动
   自动生成，存 `state.json`）；读取不设限——v0.1 假定家庭 Wi-Fi 可信。
 - **防重复**：app 在前台看通知页时，网页自己响铃，前台服务不再弹系统通知。
+- **回程链接**：state.json 的 `remote_url`（管理面板可设，走 POST /config）非空时，每条通知自动带上 `link` 字段，手机通知页卡片出现「打开远程页面回复」按钮，点一下直达 ZCode 官方远程输入框——通知知进度，一键回话。远程会话换了在面板更新链接即可。
 - **历史**：服务端保留最近 200 条（`state.json`），手机端拉取 `/history` 渲染。
-- **APK**：无 Gradle 手工流水线（`android/build_apk.py`，复用随身编程项目的
-  `_build` 工具链），WebView 壳 + 前台服务（dataSync），debug 签名，minSdk 24。
+- **APK**：无 Gradle 手工流水线（`android/build_apk.py`，优先复用随身编程项目的
+  `_build` 工具链，缺失时自动回退本机 Android SDK），WebView 壳 + 前台服务（dataSync），
+  debug 签名，minSdk 24。
 
 ## 文件结构
 
@@ -113,8 +115,11 @@ zcode-notify/
 - ✅ 已实测（电脑端）：服务启动、UDP 自动配对应答、hook 脚本（开始+完成+摘要提取）、
   SSE 实时推送、公网 MQTT 往返、真实订阅码端到端演练（电脑→broker→订阅方）、
   页面渲染、历史持久化、二维码/复制地址、APK 构建与签名校验
-- ⏳ 待真机验证：APK 安装运行、通知权限申请、后台/锁屏收通知、跨网络实际收发、
-  手机重启自启、通知点击拉起 app
+- ✅ 已实测（真机 OPPO PFZM10，Android 15，2026-10-03）：APK 安装启动、手动粘贴连接、
+  SSE 实时推送、前台服务常驻（dataSync）、回程按钮渲染。注：首启 UDP 自动配对在该机型
+  未成（手机省电休眠+广播不可靠），手动粘贴即用；锁屏系统通知需在 app 内点「开启系统通知」
+  授权（Android 15 不允许 adb 代授）后验证
+- ⏳ 待真机验证：后台/锁屏收通知、跨网络实际收发、手机重启自启、通知点击拉起 app
 - 已知边界：跨网络依赖公共 broker（broker.emqx.io，可靠性不作保证；server.py 顶部
   两个常量可改成自建 mosquitto）；手机离线时的消息不补投（clean session）；电脑关机
   或服务没开就收不到；部分国产 ROM 会杀后台/拦自启，可把 app 加白名单
@@ -122,5 +127,6 @@ zcode-notify/
 ## v0.4 候选
 
 自建/加密中转（MQTTS 或自托管 mosquitto，公共实例只作默认兜底）、离线消息补投
-（persistent session）、任务失败提醒（PostToolUseFailure）、通知里加"查看回复全文"
-链接、图标与通知渠道细节、iOS 侧（Bark 对接）。
+（persistent session）、任务失败提醒（PostToolUseFailure）、图标与通知渠道细节、
+iOS 侧（Bark 对接）。~~通知里加"查看回复全文"链接~~（full 字段已带全文）、
+~~回程链接~~（已实现：remote_url + 手机端按钮）。

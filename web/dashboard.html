@@ -89,6 +89,16 @@
     </div>
 
     <div class="card">
+      <h2>远程页面链接（手机点通知直达回复）</h2>
+      <div class="url" style="margin-bottom:8px;"><input id="remoteInput"
+        style="width:100%;background:none;border:0;outline:0;color:inherit;font:inherit;word-break:break-all;"
+        placeholder="粘贴 zcode.z.ai/remote/... 链接，留空则不带按钮"></div>
+      <button id="remoteBtn" class="ghost">保存</button>
+      <span id="remoteResult" style="margin-left:10px;font-size:13px;color:#7ee2a8;"></span>
+      <div class="hint">保存后每条通知都带「打开远程页面回复」按钮，手机上点一下直达 ZCode 输入框。远程会话换了记得回来更新。</div>
+    </div>
+
+    <div class="card">
       <h2>最近通知</h2>
       <div class="hist" id="hist">加载中…</div>
     </div>
@@ -118,6 +128,7 @@ async function poll() {
     $('#mqttHint').textContent = st.mqtt
       ? '跨网络推送已开启：手机走流量/不在家也能收（订阅码 ' + String(st.mqtt).slice(0, 10) + '…，经 broker.emqx.io 中转）'
       : '跨网络推送未开启。';
+    if (document.activeElement !== $('#remoteInput')) $('#remoteInput').value = st.remote_url || '';
     const others = (st.ips || []).filter(x => x !== st.ip);
     $('#ips').textContent = others.length ? '其它网卡 IP：' + others.join('、') : 'IP 变了的话以这里显示的为准';
     if (!qrDone && window.QRCode && !window.__noqr) {
@@ -160,6 +171,20 @@ $('#copyBtn').onclick = () => {
   };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(phoneUrl).then(() => done(true), fallback);
   else fallback();
+};
+
+$('#remoteBtn').onclick = async () => {
+  $('#remoteResult').textContent = '';
+  try {
+    const r = await fetch('/config?token=' + encodeURIComponent(TOKEN), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remote_url: $('#remoteInput').value.trim() })
+    });
+    const d = await r.json();
+    $('#remoteInput').value = d.remote_url || '';
+    $('#remoteResult').textContent = '已保存 ✓';
+  } catch (e) { $('#remoteResult').textContent = '保存失败'; }
+  setTimeout(() => $('#remoteResult').textContent = '', 2500);
 };
 
 let qrDone = false;

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ZCode 任务通知 APK 构建流水线（无需 Gradle/AGP）。
-   工具链复用 ../biancheng-app/_build（腾讯镜像下载的 build-tools + platform）。
+   工具链优先复用 ../biancheng-app/_build（腾讯镜像下载的 build-tools + platform），
+   该目录不存在时自动回退本机 Android SDK（ANDROID_SDK_ROOT 或默认安装位置）。
    步骤：aapt2 编译链接 -> javac -> d8 转 dex -> 组装 zip -> zipalign -> apksigner 签名。
 """
 import glob
@@ -13,8 +14,15 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))     # zcode-notify/android
 PROJECT = os.path.dirname(HERE)                       # zcode-notify
 TOOLCHAIN = os.path.join(os.path.dirname(PROJECT), 'biancheng-app', '_build')
-BT = os.path.join(TOOLCHAIN, 'android-14')
-PLAT_JAR = os.path.join(TOOLCHAIN, 'android-34', 'android.jar')
+SDK = os.environ.get('ANDROID_SDK_ROOT',
+                     os.path.expandvars(r'%LOCALAPPDATA%\Android\Sdk'))
+if os.path.isdir(TOOLCHAIN):
+    BT = os.path.join(TOOLCHAIN, 'android-14')
+    PLAT_JAR = os.path.join(TOOLCHAIN, 'android-34', 'android.jar')
+else:   # 本机 SDK：取版本号最大的 build-tools
+    bts = sorted(glob.glob(os.path.join(SDK, 'build-tools', '*.*.*')))
+    BT = bts[-1] if bts else os.path.join(SDK, 'build-tools', '37.0.0')
+    PLAT_JAR = os.path.join(SDK, 'platforms', 'android-34', 'android.jar')
 OUT = os.path.join(HERE, 'build')
 DIST = os.path.join(PROJECT, 'dist')
 VERSION = '0.4'
@@ -35,7 +43,8 @@ def check_tools():
                            os.path.join(BT, 'lib', 'apksigner.jar'),
                            os.path.join(BT, 'zipalign.exe')] if not os.path.exists(p)]
     if missing:
-        sys.exit('缺少工具链文件（应复用 biancheng-app/_build，请先确认其完整）：\n' + '\n'.join(missing))
+        src = 'biancheng-app/_build' if os.path.isdir(TOOLCHAIN) else '本机 Android SDK（%s）' % SDK
+        sys.exit('缺少工具链文件（当前使用 %s，请先确认其完整）：\n' % src + '\n'.join(missing))
 
 
 def step_aapt2():
@@ -98,7 +107,7 @@ def step_align_sign():
     aligned = os.path.join(OUT, 'aligned.apk')
     run([os.path.join(BT, 'zipalign.exe'), '-f', '4',
          os.path.join(OUT, 'unsigned.apk'), aligned])
-    ks = os.path.join(TOOLCHAIN, 'debug.keystore')
+    ks = os.path.join(TOOLCHAIN if os.path.isdir(TOOLCHAIN) else OUT, 'debug.keystore')
     if not os.path.exists(ks):
         run(['keytool', '-genkeypair', '-keystore', ks, '-storetype', 'PKCS12',
              '-storepass', 'android', '-keypass', 'android',

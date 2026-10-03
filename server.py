@@ -11,6 +11,7 @@
   GET  /history   最近通知列表（JSON）
   GET  /status    服务状态（客户端数、hook 配置检测等）
   POST /notify    上报一条通知（本机回环免 token，局域网需 ?token=）
+  POST /config    设置远程页面链接 remote_url（同样鉴权，存 state.json）
 """
 import json
 import os
@@ -31,8 +32,9 @@ MAX_HISTORY = 200
 
 _lock = threading.Lock()
 _clients = []            # 每个 SSE 客户端一个 Queue
-_history = []            # [{id,title,body,project,ts}]
+_history = []            # [{id,title,body,project,ts,link}]
 _token = ''              # 写接口（局域网 POST /notify）的口令，首次启动生成
+_remote_url = ''         # zcode 远程页面链接：每条通知带上，手机点卡片直达输入框
 
 BROKER_HOST = 'broker.emqx.io'   # 公网 MQTT 中转（跨网络推送）；可改成自建 mosquitto 地址
 BROKER_TLS_PORT = 8883           # MQTTS 优先，连不上自动回退 1883 明文
@@ -45,15 +47,16 @@ _mqtt_q = queue.Queue(maxsize=100)
 # ---------------------------------------------------------------- 状态与推送
 
 def load_state():
-    global _token, _history, _mqtt_topic
+    global _token, _history, _mqtt_topic, _remote_url
     try:
         with open(STATE, encoding='utf-8') as f:
             st = json.load(f)
         _token = st.get('token', '')
         _history = st.get('history', [])
         _mqtt_topic = st.get('mqtt_topic', '')
+        _remote_url = st.get('remote_url', '')
     except Exception:
-        _token, _history, _mqtt_topic = '', [], ''
+        _token, _history, _mqtt_topic, _remote_url = '', [], '', ''
     if not _token:
         _token = os.urandom(8).hex()
         save_state()
@@ -66,6 +69,7 @@ def save_state():
     try:
         with open(STATE, 'w', encoding='utf-8') as f:
             json.dump({'token': _token, 'mqtt_topic': _mqtt_topic,
+                       'remote_url': _remote_url,
                        'history': _history[-MAX_HISTORY:]},
                       f, ensure_ascii=False, indent=1)
     except Exception as e:
@@ -318,7 +322,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/status':
             st = {'clients': len(_clients), 'total': len(_history),
                   'ip': detect_ip(), 'ips': all_ips(), 'port': PORT,
-                  'token': _token, 'mqtt': _mqtt_topic, 'hook': hook_configured()}
+                  'token': _token, 'mqtt': _mqtt_topic, 'hook': hook_configured(),
+                  'remote_url': _remote_url}
             return self._send(200, 'application/json; charset=utf-8',
                               json.dumps(st, ensure_ascii=False).encode('utf-8'))
         self._send(404, 'text/plain', b'not found')
@@ -357,6 +362,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == '/config':
+            return self._config()
         if path != '/notify':
             return self._send(404, 'text/plain', b'not found')
         if not (self._loopback() or self._token_ok()):
@@ -376,10 +383,28 @@ class Handler(BaseHTTPRequestHandler):
             'project': str(data.get('project') or '')[:40],
             'ts': time.time(),
         }
+        link = str(data.get('link') or _remote_url)       # 请求未指定时用全局远程页面链接
+        if link:
+            item['link'] = link[:500]
         broadcast(item)
         print('[通知] %s | %s' % (item['title'], item['body'][:50]), flush=True)
         self.send_response(204)
         self.end_headers()
+
+    def _config(self):
+        """设置远程页面链接（本机回环免 token，局域网需 ?token=）。"""
+        if not (self._loopback() or self._token_ok()):
+            return self._send(403, 'text/plain; charset=utf-8', '口令不对'.encode('utf-8'))
+        global _remote_url
+        try:
+            length = int(self.headers.get('Content-Length', 0) or 0)
+            data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+        except Exception:
+            data = {}
+        _remote_url = str(data.get('remote_url') or '')[:500] if isinstance(data, dict) else ''
+        save_state()
+        return self._send(200, 'application/json; charset=utf-8',
+                          json.dumps({'remote_url': _remote_url}, ensure_ascii=False).encode('utf-8'))
 
 
 def main():
