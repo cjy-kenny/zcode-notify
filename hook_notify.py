@@ -135,8 +135,15 @@ def main():
             reason = ('【手机消息】手机端发来 %d 条新消息，请当作新的用户指令处理：\n%s\n'
                       '（处理完成后正常结束本轮即可，手机端会收到完成通知；'
                       '如果只是打招呼，回一句即可）' % (len(box), '\n'.join(lines)))
-            sys.stdout.write(json.dumps({'decision': 'block', 'reason': reason},
-                                        ensure_ascii=False))
+            # ZCode 的 Stop 续跑键是 continue:true（读自 glm/zcode.cjs 的 Lio：
+            # e===Stop && t.continue===true → stopShouldContinue）；
+            # hookSpecificOutput.Stop.additionalContext 再把内容注入对话，双保险
+            sys.stdout.write(json.dumps({
+                'continue': True,
+                'stopReason': reason,
+                'reason': reason,
+                'hookSpecificOutput': {'hookEventName': 'Stop', 'additionalContext': reason},
+            }, ensure_ascii=False))
             return 0
         text = last_text(ev.get('transcript_path') or ev.get('transcriptPath') or '')
         title = 'ZCode 任务完成'
