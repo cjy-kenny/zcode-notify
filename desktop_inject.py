@@ -10,6 +10,19 @@ import time
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+# 64 位下必须声明句柄宽度，否则 GlobalAlloc 返回值被截断成 32 位，
+# GlobalLock 拿到 NULL → memmove 直接访问违例
+kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+kernel32.GlobalLock.restype = wintypes.LPVOID
+kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+user32.SetClipboardData.restype = wintypes.HANDLE
+user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+user32.GetClipboardData.restype = wintypes.HANDLE
+user32.GetClipboardData.argtypes = [wintypes.UINT]
 
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
@@ -113,6 +126,17 @@ def type_into_zcode(text):
         user32.SetForegroundWindow(hwnd)
         _key(0x12, up=True)
         time.sleep(0.3)
+        # 点击窗口底部中央的输入框，保证焦点落在输入区（聊天式布局）
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        pt = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        user32.SetCursorPos(rect.left + (rect.right - rect.left) // 2,
+                            rect.bottom - int((rect.bottom - rect.top) * 0.07))
+        time.sleep(0.12)
+        user32.mouse_event(0x0002, 0, 0, 0, 0)   # 左键按下
+        user32.mouse_event(0x0004, 0, 0, 0, 0)   # 左键弹起
+        time.sleep(0.25)
         old = _clip_get()
         for attempt in range(3):
             if _clip_set('【手机消息】' + text):
