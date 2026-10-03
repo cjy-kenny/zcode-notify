@@ -112,42 +112,90 @@ def _paste():
     _key(VK_CONTROL, up=True)
 
 
-def type_into_zcode(text):
-    """把消息输入 ZCode 桌面窗口并回车发送。成功返回 True。"""
+RATIOS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'click_ratio.txt')
+VK_ESCAPE = 0x1B
+
+
+def _ratios():
+    """候选点击高度（自窗口底部起算的比例），首选上次验证成功的值。"""
     try:
+        base = [float(open(RATIOS_FILE).read().strip())]
+    except Exception:
+        base = [0.13]
+    for r in [0.13, 0.18, 0.10, 0.22]:
+        if r not in base:
+            base.append(r)
+    return base
+
+
+def _history_has(text, timeout=6):
+    """查服务端通知历史：这条消息是否已作为新任务进入 ZCode。"""
+    import json
+    import urllib.request
+    end = time.time() + timeout
+    key = ('【手机消息】' + text)[:24]
+    while time.time() < end:
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:8787/history', timeout=2) as r:
+                items = json.load(r).get('items') or []
+            for it in items:
+                if it.get('title') == 'ZCode 收到新任务' and key in (it.get('body') or ''):
+                    return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
+def type_into_zcode(text):
+    """把消息输入 ZCode 桌面窗口并回车发送，自校验：确认新任务真的进了会话。
+
+    点击高度自适应：从候选比例依次尝试，哪次成功记住哪次。
+    """
+    try:
+        import json as _json
+        import urllib.request as _req
         win = find_window()
         if not win:
             return False
-        hwnd = win
-        if user32.IsIconic(hwnd):
-            user32.ShowWindow(hwnd, 9)   # SW_RESTORE
-        # Alt 按下再弹起：绕过 SetForegroundWindow 的前台锁
-        _key(0x12)
-        user32.SetForegroundWindow(hwnd)
-        _key(0x12, up=True)
-        time.sleep(0.3)
-        # 点击窗口底部中央的输入框，保证焦点落在输入区（聊天式布局）
-        rect = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        pt = wintypes.POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        user32.SetCursorPos(rect.left + (rect.right - rect.left) // 2,
-                            rect.bottom - int((rect.bottom - rect.top) * 0.07))
-        time.sleep(0.12)
-        user32.mouse_event(0x0002, 0, 0, 0, 0)   # 左键按下
-        user32.mouse_event(0x0004, 0, 0, 0, 0)   # 左键弹起
-        time.sleep(0.25)
-        old = _clip_get()
-        for attempt in range(3):
-            if _clip_set('【手机消息】' + text):
-                break
-            time.sleep(0.2)
-        time.sleep(0.1)
-        _paste()
-        time.sleep(0.15)
-        _key(VK_RETURN)
-        time.sleep(0.1)
-        _clip_set(old)   # 还原用户剪贴板
-        return True
+        for ratio in _ratios():
+            hwnd = find_window() or win
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, 9)
+            _key(0x12)
+            user32.SetForegroundWindow(hwnd)
+            _key(0x12, up=True)
+            time.sleep(0.3)
+            _key(VK_ESCAPE)   # 关掉可能停留/打开的下拉（如模型选择器）
+            time.sleep(0.15)
+            rect = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            pt = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            user32.SetCursorPos(rect.left + (rect.right - rect.left) // 2,
+                                rect.bottom - int((rect.bottom - rect.top) * ratio))
+            time.sleep(0.12)
+            user32.mouse_event(0x0002, 0, 0, 0, 0)
+            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            time.sleep(0.25)
+            old = _clip_get()
+            for attempt in range(3):
+                if _clip_set('【手机消息】' + text):
+                    break
+                time.sleep(0.2)
+            time.sleep(0.1)
+            _paste()
+            time.sleep(0.15)
+            _key(VK_RETURN)
+            time.sleep(0.1)
+            user32.SetCursorPos(pt.x, pt.y)
+            _clip_set(old)
+            if _history_has(text):
+                try:
+                    open(RATIOS_FILE, 'w').write(str(ratio))
+                except Exception:
+                    pass
+                return True
+        return False
     except Exception:
         return False
