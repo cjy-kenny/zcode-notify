@@ -8,10 +8,10 @@ import json
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 PORT = 8787
-INBOX = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'inbox.json')
 HOOK_DEBUG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hook_debug.log')
 
 
@@ -32,44 +32,30 @@ def _write_inbox(box):
         pass
 
 
-def _read_inbox():
-    """读收件箱；撞上服务器写入的瞬间就稍等重读一次（原子替换前用双保险）。"""
-    for attempt in range(2):
-        try:
-            with open(INBOX, encoding='utf-8') as f:
-                box = json.load(f)
-            return box if isinstance(box, list) else []
-        except Exception:
-            if attempt == 0:
-                time.sleep(0.15)
-    return []
-
-
 def take_inbox(current_sid):
-    """取走投递给本会话（或未指定目标）的手机消息；指定给其它话题的保留在收件箱。"""
+    """向服务器取走投递给本会话（或未指定目标）的手机消息。
+
+    走 HTTP 而不是读文件：hook 脚本可能存在多份副本（工作区/生产），
+    但服务器和收件箱只有一份——以服务器为唯一事实源，杜绝路径错位。
+    """
     try:
-        box = _read_inbox()
-        if not box:
-            return None
-        now = time.time()
-        deliver = [m for m in box
-                   if not str(m.get('sid') or '') or str(m.get('sid')) == current_sid]
-        keep = [m for m in box if m not in deliver and now - float(m.get('ts') or 0) < 86400]
-        if not deliver:
-            if len(keep) != len(box):
-                _write_inbox(keep)   # 顺手清掉超过 24h 的过期消息
-            return None
-        _write_inbox(keep)
-        try:   # 投递流水：万一输出格式不被支持，消息还能找回
-            with open(os.path.join(os.path.dirname(INBOX), 'delivered.log'),
-                      'a', encoding='utf-8') as f:
-                f.write(json.dumps({'at': now, 'sid': current_sid, 'items': deliver},
-                                   ensure_ascii=False) + '\n')
-        except Exception:
-            pass
-        return deliver
+        url = 'http://127.0.0.1:%d/inbox-take?sid=%s' % (
+            PORT, urllib.parse.quote(current_sid or ''))
+        with urllib.request.urlopen(url, timeout=3) as r:
+            box = json.load(r).get('items') or []
     except Exception:
+        debug_log('take', current_sid, 'inbox-take failed')
         return None
+    if not box:
+        return None
+    try:   # 投递流水：万一输出格式不被支持，消息还能找回
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'delivered.log'),
+                  'a', encoding='utf-8') as f:
+            f.write(json.dumps({'at': time.time(), 'sid': current_sid, 'items': box},
+                               ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+    return box
 
 
 def see_session(ev, cwd):

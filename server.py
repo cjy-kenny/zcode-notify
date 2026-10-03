@@ -356,6 +356,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._file('jsqr.min.js')
         if path in ('/icons/icon-192.png', '/icons/icon-512.png'):
             return self._file(path.lstrip('/'))
+        if path == '/inbox-take':
+            # hook 取走手机消息：sid 空=投递所有未指定目标的消息，指定则精确匹配。
+            # 收件箱文件只有服务器一份，hook 一律走这里取——脚本副本可以有多份，
+            # 真相只有一份。
+            if not (self._loopback() or self._token_ok()):
+                return self._send(403, 'text/plain', b'forbidden')
+            q = urllib.parse.urlparse(self.path).query
+            sid = urllib.parse.parse_qs(q).get('sid', [''])[0][:64]
+            with _lock:
+                box = load_inbox()
+                now = time.time()
+                deliver = [m for m in box
+                           if not str(m.get('sid') or '') or str(m.get('sid')) == sid]
+                keep = [m for m in box if m not in deliver
+                        and now - float(m.get('ts') or 0) < 86400]
+                save_inbox(keep)
+            return self._send(200, 'application/json; charset=utf-8',
+                              json.dumps({'items': deliver}, ensure_ascii=False).encode('utf-8'))
         if path == '/events':
             return self._events()
         if path == '/sessions':
