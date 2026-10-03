@@ -102,6 +102,20 @@ def last_text(transcript_path, cap=1500):
     return ''
 
 
+def type_into_desktop(text):
+    """回合刚结束、输入栏恢复时，把消息直接打进 ZCode 桌面输入栏并发送。
+
+    不做历史校验（hook 有超时预算），只试前两个候选位置；失败返回 False。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import desktop_inject
+        return desktop_inject.type_into_zcode(text, verify=False, max_ratios=2)
+    except Exception:
+        debug_log('stop', '', 'desktop-type error')
+        return False
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'stop'
     try:
@@ -147,12 +161,20 @@ def main():
         # 形式注入会话（本轮不算完成，不发完成通知；ZCode 处理完消息、真正结束时才发）
         box = take_inbox(sid)
         if box:
+            text = '\n'.join(str(m.get('text', '')).strip()[:200] for m in box[:10])
+            debug_log('stop', sid, 'deliver %d' % len(box))
+            # 首选：回合刚结束，输入栏正在恢复——直接把消息打进桌面输入栏并发送
+            # （用户要的形态：手机发 → 自动出现在 ZCode 输入栏 → 发送 → 任务开始）
+            time.sleep(1.2)
+            if type_into_desktop(text):
+                debug_log('stop', sid, 'desktop-typed')
+                return 0   # 消息已作为新任务提交，新回合的 hook 会发「收到新任务」
+            # 回退：桌面打字失败（UI 未就绪等），以注入续跑的方式送达
             lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
                      for i, m in enumerate(box[:10], 1)]
             reason = ('【手机消息】手机端发来 %d 条新消息，请当作新的用户指令处理：\n%s\n'
                       '（处理完成后正常结束本轮即可，手机端会收到完成通知；'
                       '如果只是打招呼，回一句即可）' % (len(box), '\n'.join(lines)))
-            debug_log('stop', sid, 'deliver %d' % len(box))
             # ZCode 的 Stop 续跑键是 continue:true（读自 glm/zcode.cjs 的 Lio：
             # e===Stop && t.continue===true → stopShouldContinue）；
             # hookSpecificOutput.Stop.additionalContext 再把内容注入对话，双保险

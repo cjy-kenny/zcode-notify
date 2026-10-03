@@ -147,18 +147,21 @@ def _history_has(text, timeout=6):
     return False
 
 
-def type_into_zcode(text):
-    """把消息输入 ZCode 桌面窗口并回车发送，自校验：确认新任务真的进了会话。
+def type_into_zcode(text, verify=True, max_ratios=None):
+    """把消息输入 ZCode 桌面窗口并回车发送。
 
+    verify=True 时查新任务列表确认真的进了会话（自校验，成功的高度记入
+    click_ratio.txt 供下次首选）；verify=False 供 hook 的快速路径。
     点击高度自适应：从候选比例依次尝试，哪次成功记住哪次。
     """
     try:
-        import json as _json
-        import urllib.request as _req
+        ratios = _ratios()
+        if max_ratios:
+            ratios = ratios[:max_ratios]
         win = find_window()
         if not win:
             return False
-        for ratio in _ratios():
+        for ratio in ratios:
             hwnd = find_window() or win
             if user32.IsIconic(hwnd):
                 user32.ShowWindow(hwnd, 9)
@@ -190,7 +193,7 @@ def type_into_zcode(text):
             time.sleep(0.1)
             user32.SetCursorPos(pt.x, pt.y)
             _clip_set(old)
-            if _history_has(text):
+            if not verify or _history_has(text):
                 try:
                     open(RATIOS_FILE, 'w').write(str(ratio))
                 except Exception:
