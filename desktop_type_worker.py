@@ -41,7 +41,7 @@ def main():
 
     time.sleep(1.5)   # 等桌面 UI 从「运行中」切回「空闲」，输入栏恢复
     desktop_inject.capture_window(SHOT)
-    log('开始打字（%d 字）' % len(text))
+    log('worker-started，开始打字（%d 字）' % len(text))
     for attempt in range(3):
         if desktop_inject.type_into_zcode(text, verify=True):
             os.remove(PENDING)
@@ -49,6 +49,8 @@ def main():
             return 0
         log('第 %d 次打字未验证成功，重试' % (attempt + 1))
         time.sleep(2)
+    # 失败也拍一张：对比前后截图就能看出打字卡在哪
+    desktop_inject.capture_window(os.path.join(HERE, 'idle_after.png'))
     log('三次尝试均失败：pending_type.json 保留，下个回合边界重试')
     return 1
 
