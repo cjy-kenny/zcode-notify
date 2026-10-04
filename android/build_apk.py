@@ -6,6 +6,7 @@
 """
 import glob
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,19 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))     # zcode-notify/android
 PROJECT = os.path.dirname(HERE)                       # zcode-notify
+
+# 版本单一事实源：VERSION.txt（页面 PAGE_VERSION 与 Manifest 均从它派生）
+VERSION = open(os.path.join(PROJECT, 'VERSION.txt'), encoding='utf-8').read().strip()
+_parts = VERSION.split('.')
+VERSION_CODE = str(int(_parts[0]) * 100 + int(_parts[1]) +
+                   (int(_parts[2]) if len(_parts) > 2 else 0))
+# aapt2 的 --version-name 在 Manifest 已声明时不生效：构建前直接把版本写回 Manifest
+_manifest = os.path.join(HERE, 'AndroidManifest.xml')
+_mf = open(_manifest, encoding='utf-8').read()
+_mf = re.sub(r'android:versionCode="[^"]*"', 'android:versionCode="%s"' % VERSION_CODE, _mf)
+_mf = re.sub(r'android:versionName="[^"]*"', 'android:versionName="%s"' % VERSION, _mf)
+with open(_manifest, 'w', encoding='utf-8') as f:
+    f.write(_mf)
 TOOLCHAIN = os.path.join(os.path.dirname(PROJECT), 'biancheng-app', '_build')
 SDK = os.environ.get('ANDROID_SDK_ROOT',
                      os.path.expandvars(r'%LOCALAPPDATA%\Android\Sdk'))
@@ -25,7 +39,6 @@ else:   # 本机 SDK：取版本号最大的 build-tools
     PLAT_JAR = os.path.join(SDK, 'platforms', 'android-34', 'android.jar')
 OUT = os.path.join(HERE, 'build')
 DIST = os.path.join(PROJECT, 'dist')
-VERSION = '0.11'
 APK = os.path.join(DIST, 'zcode-notify-v%s.apk' % VERSION)
 LIBS = glob.glob(os.path.join(HERE, 'libs', '*.jar'))   # 第三方 jar（如 Paho MQTT）
 
@@ -56,7 +69,7 @@ def step_aapt2():
          '-I', PLAT_JAR,
          '--manifest', os.path.join(HERE, 'AndroidManifest.xml'),
          '--min-sdk-version', '24', '--target-sdk-version', '34',
-         '--version-code', VERSION.replace('.', ''), '--version-name', VERSION,
+         '--version-code', VERSION_CODE, '--version-name', VERSION,
          '--auto-add-overlay', res_zip])
     print('[1/5] 资源编译链接完成 (base.apk)')
 

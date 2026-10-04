@@ -30,7 +30,11 @@ STATE = os.path.join(ROOT, 'state.json')
 INBOX = os.path.join(ROOT, 'inbox.json')   # 手机发来的消息，等 Stop hook 取走注入会话
 SESSIONS = os.path.join(ROOT, 'sessions.json')   # hook 上报的会话注册表（手机选话题用）
 PORT = 8787
-PAGE_VERSION = '0.14'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
+try:   # 版本单一事实源：与 AndroidManifest / build_apk 共用 VERSION.txt
+    PAGE_VERSION = open(os.path.join(ROOT, 'VERSION.txt'),
+                        encoding='utf-8').read().strip()
+except Exception:
+    PAGE_VERSION = '0.14'   # 注入手机页页脚，用户一眼确认拿到的是不是最新页面
 MAX_HISTORY = 200
 
 _lock = threading.Lock()
