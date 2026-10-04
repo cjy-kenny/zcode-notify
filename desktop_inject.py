@@ -5,6 +5,7 @@
 全部 ctypes 实现，失败静默返回 False（调用方回退到收件箱路线）。
 """
 import ctypes
+import os
 import subprocess
 import time
 import zlib
