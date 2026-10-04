@@ -7,6 +7,7 @@
 import ctypes
 import subprocess
 import time
+import zlib
 from ctypes import wintypes
 
 user32 = ctypes.windll.user32
@@ -145,6 +146,64 @@ def _history_has(text, timeout=6):
             pass
         time.sleep(1)
     return False
+
+
+def capture_window(path):
+    """PrintWindow 截图 ZCode 主窗口并存为 PNG（用于记录空闲期布局）。"""
+    try:
+        win = find_window()
+        if not win:
+            return False
+        rect = wintypes.RECT()
+        user32.GetWindowRect(win, ctypes.byref(rect))
+        w, h = rect.right - rect.left, rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return False
+        hdc = user32.GetWindowDC(win)
+        mem = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+        gdi32.SelectObject(mem, bmp)
+        user32.PrintWindow(win, mem, 2)   # PW_RENDERFULLCONTENT
+
+        class BMPINFOHEADER(ctypes.Structure):
+            _fields_ = [('biSize', wintypes.DWORD), ('biWidth', wintypes.LONG),
+                        ('biHeight', wintypes.LONG), ('biPlanes', wintypes.WORD),
+                        ('biBitCount', wintypes.WORD), ('biCompression', wintypes.DWORD),
+                        ('biSizeImage', wintypes.DWORD), ('biXPelsPerMeter', wintypes.LONG),
+                        ('biYPelsPerMeter', wintypes.LONG), ('biClrUsed', wintypes.DWORD),
+                        ('biClrImportant', wintypes.DWORD)]
+
+        bi = BMPINFOHEADER()
+        bi.biSize = ctypes.sizeof(BMPINFOHEADER)
+        bi.biWidth = w
+        bi.biHeight = -h
+        bi.biPlanes = 1
+        bi.biBitCount = 32
+        buf = ctypes.create_string_buffer(w * h * 4)
+        gdi32.GetDIBits(mem, bmp, 0, h, buf, ctypes.byref(bi), 0)
+        px = buf.raw
+        raw = b''
+        for y in range(h):
+            row = px[y * w * 4:(y + 1) * w * 4]
+            out = bytearray(b'\x00')
+            for x in range(w):
+                out += bytes((row[x * 4 + 2], row[x * 4 + 1], row[x * 4]))
+            raw += bytes(out)
+
+        def chunk(t, d):
+            return (len(d)).to_bytes(4, 'big') + t + d + zlib.crc32(t + d).to_bytes(4, 'big')
+
+        png = (b'\x89PNG\r\n\x1a\n'
+               + chunk(b'IHDR', w.to_bytes(4, 'big') + h.to_bytes(4, 'big') + bytes([8, 2, 0, 0, 0]))
+               + chunk(b'IDAT', zlib.compress(raw, 6))
+               + chunk(b'IEND', b''))
+        open(path, 'wb').write(png)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mem)
+        user32.ReleaseDC(win, hdc)
+        return True
+    except Exception:
+        return False
 
 
 def type_into_zcode(text, verify=True, max_ratios=None):

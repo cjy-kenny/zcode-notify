@@ -12,3 +12,8 @@
 {"at": 1791041039.216079, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
 {"at": 1791041158.5051224, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
 {"at": 1791041237.0942278, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791041379.2090347, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791041379.2324448, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "deliver 1"}
+{"at": 1791041380.4520402, "mode": "stop", "sid": "", "note": "desktop-type error"}
+{"at": 1791041392.1992884, "mode": "stop", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}
+{"at": 1791041438.6413958, "mode": "start", "sid": "sess_36dfcf3b-c5ad-4c0f-", "note": "fired"}

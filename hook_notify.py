@@ -163,12 +163,18 @@ def main():
         if box:
             text = '\n'.join(str(m.get('text', '')).strip()[:200] for m in box[:10])
             debug_log('stop', sid, 'deliver %d' % len(box))
-            # 首选：回合刚结束，输入栏正在恢复——直接把消息打进桌面输入栏并发送
-            # （用户要的形态：手机发 → 自动出现在 ZCode 输入栏 → 发送 → 任务开始）
+            # 首选：回合刚结束，输入栏正在恢复——先拍一张空闲期布局，
+            # 再把消息打进桌面输入栏并发送（自校验：确认新任务真的进了会话）
             time.sleep(1.2)
-            if type_into_desktop(text):
-                debug_log('stop', sid, 'desktop-typed')
-                return 0   # 消息已作为新任务提交，新回合的 hook 会发「收到新任务」
+            try:
+                import desktop_inject
+                desktop_inject.capture_window(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), 'idle_layout.png'))
+                if desktop_inject.type_into_zcode(text, verify=True, max_ratios=3):
+                    debug_log('stop', sid, 'desktop-typed')
+                    return 0   # 消息已作为新任务提交，新回合的 hook 会发「收到新任务」
+            except Exception:
+                pass
             # 回退：桌面打字失败（UI 未就绪等），以注入续跑的方式送达
             lines = ['%d. %s' % (i, str(m.get('text', '')).strip()[:200])
                      for i, m in enumerate(box[:10], 1)]
